@@ -106,7 +106,7 @@ the full picture.
 
 ## Requirements
 
-- Rocky/RHEL 8, Apache 2.4, Python 2.7 (for the Trac stack) and Python 3 (to run
+- Rocky/RHEL 8, Apache 2.4, Python 2.7 (for the Trac stack) and Python 3.8+ (to run
   hzforge). Run as root.
 - The `hubzero` yum repo (`hubzero-trac`, `hubzero-trac-mysqlauthz`,
   `subversion-python`); for `--svn-source wandisco`, access to
