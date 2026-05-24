@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Summary | hzforge</title>
+  <meta name="description" content="What hzforge is and why it works the way it does.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../../reference/services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../operations/usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="../../operations/migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Overview</a></p>
+          <h1>Summary</h1>
+          <p class="docs-article__source">Source: <code>docs/summary.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#commands-at-a-glance">Commands at a glance</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p><code>hzforge</code> installs, uninstalls, diagnoses, and repairs <strong>HUBzero Forge
+services</strong> — Subversion, Git, gitExternal, and Trac — as self-contained Apache
+<strong>drop-ins</strong>, independent of the m4 vhost template and <code>hzcms</code>.</p>
+<p>On a HUBzero hub each tool gets a project area under <code>/tools/&lt;name&gt;/…</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>URL space</th>
+<th>Apache mechanism</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>svn</code></td>
+<td><code>/tools/&lt;name&gt;/svn</code></td>
+<td><code>mod_dav_svn</code> (<code>&lt;Location&gt;</code>)</td>
+</tr>
+<tr>
+<td><code>git</code></td>
+<td><code>/tools/&lt;name&gt;/git/&lt;name&gt;</code></td>
+<td><code>git-http-backend</code> (<code>ScriptAliasMatch</code>)</td>
+</tr>
+<tr>
+<td><code>gitExternal</code></td>
+<td><code>/tools/&lt;name&gt;/gitExternal/&lt;name&gt;</code></td>
+<td><code>git-http-backend</code> (<code>ScriptAliasMatch</code>)</td>
+</tr>
+<tr>
+<td><code>trac</code></td>
+<td><code>/tools/&lt;name&gt;/{wiki,timeline,browser,ticket,…}</code></td>
+<td>mod_wsgi (default) or mod_python</td>
+</tr>
+</tbody>
+</table>
+<p>hzforge writes <strong>one config file per service</strong> at
+<code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-&lt;svc&gt;.conf</code>, picked up by the vhost's existing
+<code>IncludeOptional &lt;hub&gt;.conf.d/*.conf</code> — so it never edits the m4-generated vhost
+or requires running <code>hzcms</code>.</p>
+<h2 id="commands-at-a-glance">Commands at a glance</h2>
+<pre><code>sudo python3 hzforge.py install                 # all services
+sudo python3 hzforge.py install trac            # one service (positional)
+sudo python3 hzforge.py install svn git trac
+sudo python3 hzforge.py uninstall git           # stop serving git (data kept)
+sudo python3 hzforge.py doctor                  # diagnose (exit 1 on FAIL)
+sudo python3 hzforge.py doctor git              # diagnose one service
+sudo python3 hzforge.py repair                  # fix drift
+</code></pre>
+<p>Preview any command with <code>--dry-run</code>; nothing touches the running server until
+<code>apachectl configtest</code> passes.</p>
+<p>See <strong><a href="../motivations/">motivations</a></strong> for why it bypasses the m4/<code>hzcms</code>,
+<strong><a href="../../reference/architecture/">architecture</a></strong> for how the drop-ins are wired,
+<strong><a href="../../reference/services/">services</a></strong> for the four services, and
+<strong><a href="../../operations/usage/">usage</a></strong> for the full command reference.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

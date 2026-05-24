@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }} | {{ site_name }}</title>
+  <meta name="description" content="{{ page_summary }}">
+  <link rel="stylesheet" href="{{ assets_href }}">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="{{ home_href }}">
+        <span class="brand__name">{{ site_name }}</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="{{ github_href }}">GitHub</a>
+        <a href="{{ home_href }}">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+{{ docs_nav }}
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="{{ group_href }}">{{ group_title }}</a></p>
+          <h1>{{ page_title }}</h1>
+          <p class="docs-article__source">Source: <code>{{ source_path }}</code></p>
+        </header>
+{{ toc }}
+        <div class="prose">
+{{ content }}
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>{{ site_name }} · <a href="{{ home_href }}">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

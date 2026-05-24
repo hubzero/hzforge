@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Motivations | hzforge</title>
+  <meta name="description" content="What hzforge is and why it works the way it does.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../../reference/services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../operations/usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="../../operations/migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Overview</a></p>
+          <h1>Motivations</h1>
+          <p class="docs-article__source">Source: <code>docs/motivations.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#off-obsolete-mod-python">Off obsolete mod_python</a></li>
+<li class="toc__item toc__item--level-2"><a href="#drop-ins-instead-of-the-m4-template">Drop-ins instead of the m4 template</a></li>
+<li class="toc__item toc__item--level-2"><a href="#one-file-per-service">One file per service</a></li>
+<li class="toc__item toc__item--level-2"><a href="#modeled-on-hzcms">Modeled on hzcms</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<h2 id="off-obsolete-mod-python">Off obsolete mod_python</h2>
+<p>HUBzero's per-tool Trac historically ran under <strong>mod_python</strong>, which is
+unmaintained and a dead end. The forward path is <strong>mod_wsgi</strong>, in two stages:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Handler</th>
+<th>mod_wsgi</th>
+<th>Python</th>
+<th>Trac</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1</strong></td>
+<td>mod_wsgi</td>
+<td>4.9.4 (pip-built)</td>
+<td>2.7</td>
+<td>existing (1.0.x)</td>
+</tr>
+<tr>
+<td><strong>2</strong></td>
+<td>mod_wsgi</td>
+<td>4.9.4 (<code>python3.11-mod_wsgi</code>)</td>
+<td>3.x</td>
+<td>1.6</td>
+</tr>
+</tbody>
+</table>
+<p>Both stages use mod_wsgi 4.9.4, so the Apache config and the WSGI shim are
+identical across the migration — only the <code>LoadModule</code> line and the interpreter
+change. hzforge can deploy either handler (<code>--trac-handler mod_wsgi|mod_python</code>)
+so a hub can move when ready. See <a href="../../operations/migration/">migration</a>.</p>
+<h2 id="drop-ins-instead-of-the-m4-template">Drop-ins instead of the m4 template</h2>
+<p>The HUBzero vhost is generated from an m4 template by <code>hzcms</code>. Putting Forge service
+config there means:</p>
+<ul>
+<li>every change requires regenerating the vhost (and <code>hzcms</code> is not safe to run on
+some hosts), and</li>
+<li>a future regeneration silently clobbers hand edits.</li>
+</ul>
+<p>hzforge instead writes plain Apache config into <code>/etc/httpd/&lt;hub&gt;.conf.d/</code>, which
+the vhost already includes. The config is <strong>independent of the m4/<code>hzcms</code>
+lifecycle</strong>: it survives vhost regeneration and needs no template toggles.</p>
+<blockquote>
+<p>The per-tool <code>svn.conf</code> / <code>git.conf</code> blocks are still produced by the hub's
+existing MySQL-driven generator. hzforge only <em>includes</em> them and shields them
+from the CMS catch-all rewrite — it does not reinvent that generator.</p>
+</blockquote>
+<h2 id="one-file-per-service">One file per service</h2>
+<p>Each service is its own drop-in (<code>00-forge-svn.conf</code>, <code>00-forge-trac.conf</code>, …).
+That keeps the lifecycle simple and isolated:</p>
+<ul>
+<li><code>install &lt;svc&gt;</code> writes only that service's file;</li>
+<li><code>uninstall &lt;svc&gt;</code> is just deleting that file (repository data is always kept);</li>
+<li><code>doctor &lt;svc&gt;</code> / <code>repair &lt;svc&gt;</code> scope to one service, while genuinely global
+checks (<code>configtest</code>, interpreter state) always run.</li>
+</ul>
+<h2 id="modeled-on-hzcms">Modeled on hzcms</h2>
+<p>The directory layout, permissions, and <code>hzsvn</code>/<code>hzgit</code> group handling follow
+<code>hzcms</code>'s <code>subversionConfigure</code> / <code>gitConfigure</code> / <code>tracConfigure</code>. The difference
+is that hzforge also <strong>installs the packages</strong> (which <code>hzcms</code> leaves to rpm deps)
+and writes drop-ins rather than regenerating the vhost.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

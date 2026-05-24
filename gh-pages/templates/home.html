@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ site_name }}</title>
+  <meta name="description" content="{{ site_description }}">
+  <link rel="stylesheet" href="{{ assets_href }}">
+</head>
+<body class="site-home">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href=".">
+        <span class="brand__name">{{ site_name }}</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="{{ github_href }}">GitHub</a>
+      </nav>
+    </header>
+
+    <section class="hero">
+      <img class="hero__logo" src="assets/logo.svg" alt="" aria-hidden="true" width="96" height="96">
+      <h1 class="hero__title">HUBzero Forge Services</h1>
+      <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
+    </section>
+
+    <main id="main-content" class="home-layout" tabindex="-1">
+      <aside class="home-sidebar" aria-label="Documentation sections">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+{{ docs_nav }}
+        </nav>
+      </aside>
+
+      <article class="home-main">
+        <section class="home-main__about">
+{{ readme_html }}
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>{{ site_name }} · <a href="{{ github_href }}">GitHub</a></p>
+    </footer>
+  </div>
+</body>
+</html>

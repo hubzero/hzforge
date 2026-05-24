@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Usage | hzforge</title>
+  <meta name="description" content="Command reference and the mod_python → mod_wsgi migration.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../../overview/motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../../reference/services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="../migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Operations</a></p>
+          <h1>Usage</h1>
+          <p class="docs-article__source">Source: <code>docs/usage.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#commands">Commands</a></li>
+<li class="toc__item toc__item--level-3"><a href="#install-services">install `[services]`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#uninstall-services-purge">uninstall `&lt;services&gt; [--purge]`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#doctor-services">doctor `[services]`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#repair-services">repair `[services]`</a></li>
+<li class="toc__item toc__item--level-2"><a href="#options-install">Options (install)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#exit-codes">Exit codes</a></li>
+<li class="toc__item toc__item--level-2"><a href="#safety">Safety</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>Run as <strong>root</strong> (<code>sudo</code>). Services are <strong>positional</strong> (space- or comma-separated).
+A bare <code>hzforge</code> prints help.</p>
+<pre><code>sudo python3 hzforge.py install                          # all services
+sudo python3 hzforge.py install trac                     # one service
+sudo python3 hzforge.py install svn git gitExternal trac
+sudo python3 hzforge.py install trac --trac-handler mod_python
+sudo python3 hzforge.py uninstall git                    # stop serving git (data kept)
+sudo python3 hzforge.py uninstall trac --purge           # also remove packages/artifacts
+sudo python3 hzforge.py doctor                           # diagnose all configured
+sudo python3 hzforge.py doctor git                       # diagnose one service
+sudo python3 hzforge.py repair                           # fix drift
+sudo python3 hzforge.py repair trac
+</code></pre>
+<p>Preview any command without changing anything:</p>
+<pre><code>sudo python3 hzforge.py install --dry-run
+</code></pre>
+<h2 id="commands">Commands</h2>
+<h3 id="install-services">install <code>[services]</code></h3>
+<p>Install packages, create <code>/opt/&lt;svc&gt;/tools</code> dirs (perms modeled on <code>hzcms</code>), join
+<code>hzsvn</code>/<code>hzgit</code> groups if present, and write the per-service drop-in(s). No
+services = all four. Consolidates a legacy standalone <code>trac.conf</code> into the trac
+drop-in.</p>
+<h3 id="uninstall-services-purge">uninstall <code>&lt;services&gt; [--purge]</code></h3>
+<p>Remove a service's drop-in (and, for trac, unload its interpreter module). <strong>Never
+deletes repository data</strong> under <code>/opt/&lt;svc&gt;/tools</code>. <code>--purge</code> additionally removes
+the installed packages, the wandisco repo file, and the WSGI shim — but still never
+the repo data.</p>
+<h3 id="doctor-services">doctor <code>[services]</code></h3>
+<p>Read-only diagnosis; exits non-zero if anything is <strong>FAIL</strong>. Service-specific checks
+are scoped to the requested services; global checks (<code>apachectl configtest</code>,
+running-vs-on-disk interpreter state, a stray legacy <code>trac.conf</code>) always run.</p>
+<h3 id="repair-services">repair <code>[services]</code></h3>
+<p>Diagnose, then re-assert the requested (configured) services — fixing missing
+shim/dirs, file permissions, and module state — then validate and reload/restart.
+<code>repair git</code> is isolated to git; it won't touch trac.</p>
+<h2 id="options-install">Options (install)</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--trac-handler {mod_wsgi,mod_python}</code></td>
+<td><code>mod_wsgi</code></td>
+<td>Exactly one interpreter is loaded.</td>
+</tr>
+<tr>
+<td><code>--svn-source {wandisco,appstream}</code></td>
+<td><code>wandisco</code></td>
+<td><code>subversion</code>+<code>mod_dav_svn</code> source; <code>subversion-python</code> always from hubzero.</td>
+</tr>
+<tr>
+<td><code>--trac-spec</code></td>
+<td><code>Trac&gt;=1.0,&lt;1.1</code></td>
+<td>pip spec matching env DB schema (no upgrade).</td>
+</tr>
+<tr>
+<td><code>--modwsgi-spec</code></td>
+<td><code>mod_wsgi==4.9.4</code></td>
+<td>last Python-2-capable mod_wsgi.</td>
+</tr>
+<tr>
+<td><code>--ldap-url</code> / <code>--ldap-binddn</code> / <code>--ldap-bindpw</code></td>
+<td>auto-detect</td>
+<td>for the Trac <code>/login</code> auth block; read from the existing <code>svn.conf</code> if not given.</td>
+</tr>
+<tr>
+<td><code>--force-pip</code></td>
+<td>off</td>
+<td>reinstall Trac even if importable.</td>
+</tr>
+</tbody>
+</table>
+<p>Common to all commands: <code>--hub &lt;name&gt;</code> (auto-detected from <code>sites.d</code>),
+<code>--dry-run</code>, <code>--no-restart</code>.</p>
+<h2 id="exit-codes">Exit codes</h2>
+<ul>
+<li><code>doctor</code> exits <strong>0</strong> when there are no FAIL findings, <strong>1</strong> otherwise — handy in
+CI or monitoring.</li>
+<li>Other commands exit non-zero on a hard error (e.g. <code>configtest</code> failure, after
+which the running server is left untouched).</li>
+</ul>
+<h2 id="safety">Safety</h2>
+<ul>
+<li><code>apachectl configtest</code> runs before any reload/restart; on failure hzforge aborts
+without touching the running server.</li>
+<li><code>--dry-run</code> previews every action; <code>--no-restart</code> stages changes without applying.</li>
+<li><code>uninstall</code> preserves repository data; <code>--purge</code> still never removes
+<code>/opt/&lt;svc&gt;/tools</code>.</li>
+</ul>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

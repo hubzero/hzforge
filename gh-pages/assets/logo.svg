@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" aria-hidden="true" role="img">
+  <!-- Subtle outer frame for definition on dark backgrounds -->
+  <rect x="6" y="6" width="84" height="84" rx="10"
+        fill="none" stroke="#3a4860" stroke-width="1.5" opacity="0.9"/>
+
+  <!-- "log lines flowing in" — three short tick marks on the left -->
+  <g fill="#7d8aa0">
+    <rect x="16" y="32" width="10" height="2" rx="1"/>
+    <rect x="16" y="40" width="14" height="2" rx="1"/>
+    <rect x="16" y="48" width="9"  height="2" rx="1"/>
+    <rect x="16" y="56" width="13" height="2" rx="1"/>
+    <rect x="16" y="64" width="11" height="2" rx="1"/>
+  </g>
+
+  <!-- arrow: "becoming aggregated metrics" -->
+  <path d="M 34 47 L 44 47 L 44 42 L 53 49 L 44 56 L 44 51 L 34 51 Z"
+        fill="#b07a17"/>
+
+  <!-- bar chart: three ascending bars -->
+  <g>
+    <rect x="58" y="62" width="8" height="14" rx="1.5" fill="#c8d3e4"/>
+    <rect x="68" y="48" width="8" height="28" rx="1.5" fill="#d4a747"/>
+    <rect x="78" y="32" width="8" height="44" rx="1.5" fill="#c8d3e4"/>
+  </g>
+
+  <!-- baseline under bars -->
+  <rect x="56" y="78" width="32" height="1.5" rx="0.75" fill="#7d8aa0"/>
+</svg>

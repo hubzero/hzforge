@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hzforge</title>
+  <meta name="description" content="Documentation for hzforge: one tool that installs, uninstalls, diagnoses, and repairs HUBzero per-tool Subversion, Git, gitExternal, and Trac services as self-contained Apache drop-ins — independent of the m4 template and hzcms.">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body class="site-home">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href=".">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+      </nav>
+    </header>
+
+    <section class="hero">
+      <img class="hero__logo" src="assets/logo.svg" alt="" aria-hidden="true" width="96" height="96">
+      <h1 class="hero__title">HUBzero Forge Services</h1>
+      <span class="hero__beta-stamp" aria-label="Beta release">Beta</span>
+    </section>
+
+    <main id="main-content" class="home-layout" tabindex="-1">
+      <aside class="home-sidebar" aria-label="Documentation sections">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="overview/motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="reference/services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="operations/index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="operations/usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="operations/migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="home-main">
+        <section class="home-main__about">
+<div class="prose">
+<p>Documentation for <code>hzforge</code> — the tool that installs, uninstalls, diagnoses, and
+repairs HUBzero Forge services (Subversion, Git, gitExternal, Trac) as
+self-contained Apache drop-ins, independent of the m4 template and <code>hzcms</code>.</p>
+<p>Read in roughly this order if new to the project:</p>
+<ol>
+<li><strong><a href="overview/summary/">summary.md</a></strong> — what hzforge is, the four services, and the
+commands at a glance.</li>
+<li><strong><a href="overview/motivations/">motivations.md</a></strong> — why it bypasses the m4/<code>hzcms</code>, the
+mod_python → mod_wsgi migration, and the one-file-per-service model.</li>
+<li><strong><a href="reference/architecture/">architecture.md</a></strong> — how the drop-ins are wired:
+alias-vs-<code>&lt;Location&gt;</code> handlers and the <code>[END]</code> carve-out, the WSGI shim, the
+Trac handlers, and the restart-vs-reload logic.</li>
+<li><strong><a href="reference/services/">services.md</a></strong> — the four services in detail (svn, git,
+gitExternal, trac): packages, repo dirs, and per-service config.</li>
+<li><strong><a href="operations/usage/">usage.md</a></strong> — full command reference: install / uninstall /
+doctor / repair, options, exit codes, and safety flags.</li>
+<li><strong><a href="operations/migration/">migration.md</a></strong> — mod_python → mod_wsgi runbook, the gotchas
+hzforge handles, and the Stage 2 (Python 3 / Trac 1.6) path.</li>
+</ol>
+<p>For a quick CLI reference:</p>
+<pre><code>sudo python3 hzforge.py --help
+</code></pre>
+<hr />
+<p>The reference HUBzero deployment for this tool is a hub at Purdue; the same script
+runs on other HUBzero hubs as well.</p>
+
+</div>
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="https://github.com/hubzero/hzforge">GitHub</a></p>
+    </footer>
+  </div>
+</body>
+</html>

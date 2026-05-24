@@ -1,0 +1,26 @@
+{
+  "site_name": "hzforge",
+  "site_tagline": "Install, diagnose, and repair HUBzero Forge services as Apache drop-ins.",
+  "site_description": "Documentation for hzforge: one tool that installs, uninstalls, diagnoses, and repairs HUBzero per-tool Subversion, Git, gitExternal, and Trac services as self-contained Apache drop-ins — independent of the m4 template and hzcms.",
+  "github_href": "https://github.com/hubzero/hzforge",
+  "groups": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "summary": "What hzforge is and why it works the way it does.",
+      "pages": ["summary", "motivations"]
+    },
+    {
+      "slug": "reference",
+      "title": "Reference",
+      "summary": "How the drop-ins are wired, and the four Forge services.",
+      "pages": ["architecture", "services"]
+    },
+    {
+      "slug": "operations",
+      "title": "Operations",
+      "summary": "Command reference and the mod_python → mod_wsgi migration.",
+      "pages": ["usage", "migration"]
+    }
+  ]
+}

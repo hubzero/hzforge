@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Migration: mod_python → mod_wsgi | hzforge</title>
+  <meta name="description" content="Command reference and the mod_python → mod_wsgi migration.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../../overview/motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../../reference/services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Operations</a></p>
+          <h1>Migration: mod_python → mod_wsgi</h1>
+          <p class="docs-article__source">Source: <code>docs/migration.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#why-it-s-more-than-a-handler-swap">Why it&#x27;s more than a handler swap</a></li>
+<li class="toc__item toc__item--level-2"><a href="#what-the-install-does">What the install does</a></li>
+<li class="toc__item toc__item--level-2"><a href="#gotchas-handled-by-hzforge">Gotchas (handled by hzforge)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#verify">Verify</a></li>
+<li class="toc__item toc__item--level-2"><a href="#stage-2-later-python-3-trac-1-6">Stage 2 (later): Python 3 / Trac 1.6</a></li>
+<li class="toc__item toc__item--level-2"><a href="#rollback">Rollback</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>Stage 1 of moving HUBzero Trac off the obsolete mod_python handler onto mod_wsgi,
+keeping the existing Python 2 Trac environments. <code>hzforge install trac</code> automates
+this; the steps below explain what it does and the gotchas it handles.</p>
+<h2 id="why-it-s-more-than-a-handler-swap">Why it's more than a handler swap</h2>
+<p>mod_python let you bind a handler to any <code>&lt;Location&gt;</code> and declare the mount point
+with <code>PythonOption TracUriRoot /tools/&lt;name&gt;</code>. mod_wsgi has no such knob — Trac
+derives its base URL from <code>SCRIPT_NAME</code>. hzforge restores that control with a small
+WSGI shim that re-splits <code>SCRIPT_NAME</code>/<code>PATH_INFO</code> itself (see
+<a href="../../reference/architecture/#the-wsgi-shim-tracuriroot-replacement">architecture</a>).</p>
+<h2 id="what-the-install-does">What the install does</h2>
+<ol>
+<li><strong>Packages</strong> — <code>hubzero-trac</code> (+ <code>hubzero-trac-mysqlauthz</code>, which provides
+<code>HubzeroPermissionStore</code> and the <code>hubzeroplugin</code> components the envs need);
+Trac core and <code>mod_wsgi==4.9.4</code> via pip (the last Python-2-capable release).</li>
+<li><strong>Shim</strong> — <code>/opt/trac/wsgi/hubtrac.wsgi</code>.</li>
+<li><strong>Module config</strong> — load mod_wsgi (<code>10-wsgi.conf</code>), <strong>unload mod_python</strong>
+(<code>10-python.conf</code> → <code>.disabled</code>); the two interpreters can't coexist.</li>
+<li><strong>Drop-in</strong> — <code>00-forge-trac.conf</code> with <code>WSGIScriptAliasMatch</code> routing the Trac
+verbs to the shim, plus the <code>/login</code> LDAP auth block. No CMS carve-out is needed
+because the alias self-diverts.</li>
+<li><strong>Validate + cut over</strong> — <code>apachectl configtest</code>, then a <strong>full restart</strong> (a
+graceful reload cannot swap the embedded interpreter).</li>
+</ol>
+<h2 id="gotchas-handled-by-hzforge">Gotchas (handled by hzforge)</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Handling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Permission denied</code> on an egg-info under apache; Trac 500s</td>
+<td>root <code>umask 0077</code> makes pip files unreadable</td>
+<td>pip installs run with <code>umask 022</code>; conditional, package-scoped <code>chmod a+rX</code> only if apache actually can't import Trac</td>
+</tr>
+<tr>
+<td><code>mod_wsgi: cannot be used with mod_python</code> → <code>Configuration Failed, exiting</code></td>
+<td>both interpreter modules loaded</td>
+<td>mod_python is unloaded as part of the cutover</td>
+</tr>
+<tr>
+<td>httpd exits during a graceful reload</td>
+<td>reload can't hot-swap the interpreter</td>
+<td>hzforge does a full restart when the interpreter set changes</td>
+</tr>
+<tr>
+<td>repo browser shows &quot;Subversion support not available&quot;</td>
+<td><code>subversion-python</code> SWIG bindings absent</td>
+<td>optional — installed only when the svn service is also installed</td>
+</tr>
+</tbody>
+</table>
+<p>A non-obvious detail when testing by hand: the hub vhost listens on a specific
+public IP, not loopback, so probe it with
+<code>curl --resolve &lt;fqdn&gt;:443:&lt;listen-ip&gt; https://&lt;fqdn&gt;/tools/&lt;env&gt;/wiki</code>.</p>
+<h2 id="verify">Verify</h2>
+<pre><code>sudo python3 hzforge.py doctor trac
+</code></pre>
+<p>Expect <code>apachectl configtest: Syntax OK</code>, <code>apache can import Trac</code>, the shim
+present, and the interpreters matching disk. A live check:</p>
+<pre><code>curl -k --resolve &lt;fqdn&gt;:443:&lt;ip&gt; -o /dev/null -w '%{http_code}\n' \
+  https://&lt;fqdn&gt;/tools/&lt;env&gt;/wiki      # 200 = Trac via mod_wsgi
+</code></pre>
+<h2 id="stage-2-later-python-3-trac-1-6">Stage 2 (later): Python 3 / Trac 1.6</h2>
+<p><code>dnf install python3.11-mod_wsgi</code> (also 4.9.4) replaces the pip-built
+<code>LoadModule</code> line; the drop-in, shim, and auth block carry over unchanged. Trac is
+upgraded to 1.6 (Python 3) and the 2.2 hubzero plugins are ported. Because both
+stages use mod_wsgi 4.9.4, only the <code>LoadModule</code> line and the interpreter change.</p>
+<h2 id="rollback">Rollback</h2>
+<p>Config-only — the Trac envs, SVN repos, <code>trac.ini</code>, and plugins are untouched:</p>
+<pre><code>sudo python3 hzforge.py uninstall trac    # removes the drop-in, unloads mod_wsgi
+</code></pre>
+<p>Then restore the previous mod_python config if you had one.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

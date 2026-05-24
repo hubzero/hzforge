@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Services | hzforge</title>
+  <meta name="description" content="How the drop-ins are wired, and the four Forge services.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../../overview/motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../operations/usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="../../operations/migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Reference</a></p>
+          <h1>Services</h1>
+          <p class="docs-article__source">Source: <code>docs/services.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#svn-subversion-over-webdav">svn — Subversion over WebDAV</a></li>
+<li class="toc__item toc__item--level-2"><a href="#git-local-git-over-http">git — local Git over HTTP</a></li>
+<li class="toc__item toc__item--level-2"><a href="#gitexternal-external-git-mirror">gitExternal — external Git mirror</a></li>
+<li class="toc__item toc__item--level-2"><a href="#trac-project-wiki-tickets-timeline-browser">trac — project wiki, tickets, timeline, browser</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>hzforge manages four Forge services. Each is an independent drop-in; install,
+uninstall, and diagnose them separately.</p>
+<p>Shared setup for every service (modeled on <code>hzcms</code>):</p>
+<ul>
+<li>create <code>/opt/&lt;svc&gt;/tools</code> with hzcms's permissions;</li>
+<li>join the web user + <code>apps</code> to <code>hzsvn</code> / <code>hzgit</code> groups <strong>if those groups exist</strong>;</li>
+<li>create the <code>&lt;hub&gt;.conf.d/{svn,git}</code> include dirs (0700, apache);</li>
+<li>write <code>00-forge-&lt;svc&gt;.conf</code> and validate + reload.</li>
+</ul>
+<blockquote>
+<p>Per-tool repository blocks (<code>svn/svn.conf</code>, <code>git/git.conf</code>,
+<code>git/gitExternal.conf</code>) come from the hub's existing MySQL-driven generator.
+hzforge <strong>includes</strong> them; it does not generate them.</p>
+</blockquote>
+<h2 id="svn-subversion-over-webdav">svn — Subversion over WebDAV</h2>
+<p><code>mod_dav_svn</code> serves each repo at <code>/tools/&lt;name&gt;/svn</code> via a <code>&lt;Location&gt;</code> with
+<code>SVNPath /opt/svn/tools/&lt;name&gt;</code> and LDAP auth (from the generated <code>svn.conf</code>).
+Because it's a <code>&lt;Location&gt;</code> handler, the drop-in adds a <code>[END]</code> shield so the CMS
+catch-all rewrite doesn't capture <code>/tools/&lt;name&gt;/svn</code>.</p>
+<ul>
+<li>Packages: <code>subversion</code> + <code>mod_dav_svn</code> (from <code>wandisco-svn110</code> by default;
+<code>--svn-source appstream</code> for the appstream module), plus <code>subversion-python</code>
+(from hubzero) — which also lights up Trac's repo browser.</li>
+<li>Repos: <code>/opt/svn/tools/&lt;name&gt;</code>.</li>
+</ul>
+<h2 id="git-local-git-over-http">git — local Git over HTTP</h2>
+<p><code>git-http-backend</code> serves <code>/tools/&lt;name&gt;/git/&lt;name&gt;</code> via a <code>ScriptAliasMatch</code>
+(<code>GIT_PROJECT_ROOT=/opt/git/tools</code>). Because it's alias-based it self-diverts at
+translate-name, so no carve-out is required (a <code>[END]</code> is still added for parity
+with the m4 behavior on non-protocol paths).</p>
+<ul>
+<li>Package: <code>git</code>.</li>
+<li>Repos: <code>/opt/git/tools/&lt;name&gt;</code>.</li>
+</ul>
+<h2 id="gitexternal-external-git-mirror">gitExternal — external Git mirror</h2>
+<p>Same mechanism as <code>git</code> but rooted at <code>/opt/gitExternal/tools</code> and served at
+<code>/tools/&lt;name&gt;/gitExternal/&lt;name&gt;</code>. Used for repositories mirrored/published
+outside the hub's own git area.</p>
+<ul>
+<li>Package: <code>git</code>.</li>
+<li>Repos: <code>/opt/gitExternal/tools/&lt;name&gt;</code>.</li>
+</ul>
+<h2 id="trac-project-wiki-tickets-timeline-browser">trac — project wiki, tickets, timeline, browser</h2>
+<p>Per-tool Trac environments under <code>/opt/trac/tools/&lt;name&gt;</code>, served at the Trac
+verbs (<code>wiki</code>, <code>timeline</code>, <code>roadmap</code>, <code>browser</code>, <code>changeset</code>, <code>ticket</code>,
+<code>newticket</code>, <code>report</code>, <code>query</code>, <code>search</code>, <code>admin</code>, <code>prefs</code>, <code>login</code>, <code>logout</code>,
+<code>about</code>, <code>diff</code>, <code>attachment</code>, <code>raw-attachment</code>, <code>export</code>, <code>chrome</code>, <code>log</code>,
+<code>pygments</code>).</p>
+<ul>
+<li>Handler: mod_wsgi (default) or mod_python — see
+<a href="../architecture/">architecture</a>.</li>
+<li>Packages: <code>hubzero-trac</code> (+ <code>hubzero-trac-mysqlauthz</code> — provides
+<code>HubzeroPermissionStore</code> and the <code>hubzeroplugin</code> components the envs require);
+Trac core + <code>mod_wsgi==4.9.4</code> via pip for the mod_wsgi handler.</li>
+<li>Envs: <code>/opt/trac/tools/&lt;name&gt;</code> (paired with the matching <code>/opt/svn/tools/&lt;name&gt;</code>
+repository for the browser).</li>
+<li>Repo browser is optional — see
+<a href="../architecture/#trac--subversion-are-decoupled">Trac ↔ Subversion are decoupled</a>.</li>
+</ul>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

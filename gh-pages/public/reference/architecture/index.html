@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture | hzforge</title>
+  <meta name="description" content="How the drop-ins are wired, and the four Forge services.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../../overview/motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../operations/index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../operations/usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="../../operations/migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Reference</a></p>
+          <h1>Architecture</h1>
+          <p class="docs-article__source">Source: <code>docs/architecture.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#drop-in-placement">Drop-in placement</a></li>
+<li class="toc__item toc__item--level-2"><a href="#alias-handlers-vs-location-handlers-the-carve-out">Alias handlers vs. `&lt;Location&gt;` handlers — the carve-out</a></li>
+<li class="toc__item toc__item--level-2"><a href="#the-wsgi-shim-tracuriroot-replacement">The WSGI shim (TracUriRoot replacement)</a></li>
+<li class="toc__item toc__item--level-2"><a href="#trac-handlers">Trac handlers</a></li>
+<li class="toc__item toc__item--level-2"><a href="#restart-vs-reload">Restart vs. reload</a></li>
+<li class="toc__item toc__item--level-2"><a href="#trac-subversion-are-decoupled">Trac ↔ Subversion are decoupled</a></li>
+<li class="toc__item toc__item--level-2"><a href="#package-sources-permissions">Package sources &amp; permissions</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>How hzforge wires the Forge services into Apache without touching the m4 vhost.</p>
+<h2 id="drop-in-placement">Drop-in placement</h2>
+<p>The HUBzero vhost includes <code>IncludeOptional &lt;hub&gt;.conf.d/*.conf</code> inside its
+<code>&lt;VirtualHost&gt;</code>. hzforge writes one file per service there:</p>
+<pre><code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-svn.conf
+/etc/httpd/&lt;hub&gt;.conf.d/00-forge-git.conf
+/etc/httpd/&lt;hub&gt;.conf.d/00-forge-gitExternal.conf
+/etc/httpd/&lt;hub&gt;.conf.d/00-forge-trac.conf
+</code></pre>
+<p>The <code>00-forge-</code> prefix loads them early and predictably relative to other
+drop-ins. Each file is self-contained: its own <code>RewriteEngine On</code>, its <code>[END]</code>
+shield (where needed), an <code>IncludeOptional</code> of the externally-generated per-tool
+block, and (for trac) the handler.</p>
+<h2 id="alias-handlers-vs-location-handlers-the-carve-out">Alias handlers vs. <code>&lt;Location&gt;</code> handlers — the carve-out</h2>
+<p>The vhost's catch-all sends everything that isn't a real file to the CMS:</p>
+<pre><code class="language-apache">RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule (.*) index.php
+</code></pre>
+<p>How a service avoids that rule decides whether it needs a &quot;carve-out&quot;:</p>
+<ul>
+<li>
+<p><strong>Alias-based handlers self-divert.</strong> <code>WSGIScriptAliasMatch</code> (mod_wsgi Trac) and
+<code>ScriptAliasMatch</code> (git, gitExternal) map the request to a script at Apache's
+<strong>translate-name</strong> phase — <em>before</em> the per-directory rewrite runs. No carve-out
+is needed. (Verified: <code>/tools/&lt;t&gt;/query</code> and <code>/report</code>, which aren't in the old
+m4 carve-out, still reach Trac under mod_wsgi.)</p>
+</li>
+<li>
+<p><strong><code>&lt;Location&gt;</code> handlers stay in the docroot.</strong> <code>mod_dav_svn</code> (svn) and
+mod_python Trac use <code>&lt;Location&gt;</code>, so the request still maps into the docroot
+where the rewrite would clobber it. hzforge shields those paths with a
+vhost-scope rule using the <code>[END]</code> flag (which also stops <em>per-directory</em>
+rewriting):</p>
+<pre><code class="language-apache">RewriteRule &quot;^/tools/[^/]+/svn(/|$)&quot; - [END]
+</code></pre>
+</li>
+</ul>
+<p>This is why the old m4 needed a <code>USE_TRAC</code>/<code>USE_SUBVERSION</code> carve-out for the
+mod_python era, and why the mod_wsgi era needs none for Trac.</p>
+<h2 id="the-wsgi-shim-tracuriroot-replacement">The WSGI shim (TracUriRoot replacement)</h2>
+<p>mod_python let you declare a Trac mount with <code>PythonOption TracUriRoot /tools/&lt;name&gt;</code>. mod_wsgi has no such knob — Trac derives its base URL from
+<code>SCRIPT_NAME</code>. A small shim at <code>/opt/trac/wsgi/hubtrac.wsgi</code> restores that control:
+it re-splits <code>SCRIPT_NAME=/tools/&lt;name&gt;</code> and <code>PATH_INFO=/&lt;verb&gt;/…</code> from the request
+and selects the matching env under <code>/opt/trac/tools/&lt;name&gt;</code> — regardless of how
+Apache split the URL.</p>
+<h2 id="trac-handlers">Trac handlers</h2>
+<ul>
+<li><strong>mod_wsgi</strong> (default): <code>WSGIDaemonProcess</code> + <code>WSGIScriptAliasMatch</code> routing the
+Trac verbs to the shim. Trac core is pip-installed (<code>Trac</code>, <code>mod_wsgi==4.9.4</code> —
+the last Python-2-capable release), plus the <code>hubzero-trac</code> plugins.</li>
+<li><strong>mod_python</strong> (legacy): one <code>&lt;Location /tools/&lt;name&gt;&gt;</code> per environment plus the
+trac-verb <code>[END]</code> shield. Selectable with <code>--trac-handler mod_python</code>.</li>
+</ul>
+<p>The two interpreters cannot coexist in one Apache, so exactly one is loaded;
+<code>10-wsgi.conf</code> and <code>10-python.conf</code> are enabled/disabled accordingly.</p>
+<h2 id="restart-vs-reload">Restart vs. reload</h2>
+<p>A graceful reload cannot hot-swap an embedded interpreter. hzforge decides by
+comparing the <strong>running</strong> server's loaded modules (read from <code>/proc/&lt;pid&gt;/maps</code>)
+against what's enabled on disk:</p>
+<ul>
+<li>interpreter set must change → full <code>systemctl restart httpd</code>;</li>
+<li>otherwise → graceful <code>systemctl reload httpd</code>.</li>
+</ul>
+<p>Every apply runs <code>apachectl configtest</code> first and aborts on failure, leaving the
+running server untouched.</p>
+<h2 id="trac-subversion-are-decoupled">Trac ↔ Subversion are decoupled</h2>
+<p>Trac runs fine without Subversion; only the repository <em>browser</em> degrades to an
+error. So <code>install trac</code> does <strong>not</strong> pull <code>mod_dav_svn</code> or the <code>subversion-python</code>
+SWIG bindings. The browser is auto-enabled only when the svn service is also
+installed (which brings <code>subversion-python</code>), and <code>doctor</code> checks the browser only
+when svn is configured. (<code>hzforge</code> still enables the svn module/repo during trac
+setup, because the <code>hubzero-trac</code> rpm requires <code>subversion-devel</code>.)</p>
+<h2 id="package-sources-permissions">Package sources &amp; permissions</h2>
+<ul>
+<li><strong>Subversion / mod_dav_svn</strong>: from <code>wandisco-svn110</code> by default
+(<code>--svn-source appstream</code> to use the appstream module instead);
+<code>subversion-python</code> always from the hubzero repo.</li>
+<li><strong>pip files &amp; umask</strong>: pip installs run under <code>umask 022</code> so files are readable
+by <code>apache</code>. Permission remediation is <em>conditional</em> — only when a probe shows
+apache can't import Trac — and scoped to the Trac/mod_wsgi packages, never a
+blanket <code>chmod</code> of <code>site-packages</code>.</li>
+</ul>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

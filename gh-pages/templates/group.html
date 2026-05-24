@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ group_title }} | {{ site_name }}</title>
+  <meta name="description" content="{{ group_summary }}">
+  <link rel="stylesheet" href="{{ assets_href }}">
+</head>
+<body class="site-group">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="{{ home_href }}">
+        <span class="brand__name">{{ site_name }}</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="{{ github_href }}">GitHub</a>
+        <a href="{{ home_href }}">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="group-layout" tabindex="-1">
+      <header class="group-header">
+        <p class="eyebrow">Section</p>
+        <h1>{{ group_title }}</h1>
+        <p class="group-header__summary">{{ group_summary }}</p>
+        <p class="group-header__count">{{ page_count }} pages</p>
+      </header>
+
+      <ul class="group-pages">
+{{ page_list }}
+      </ul>
+    </main>
+
+    <footer class="site-footer">
+      <p>{{ site_name }} · <a href="{{ home_href }}">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>
