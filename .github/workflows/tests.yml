@@ -1,0 +1,60 @@
+name: tests
+
+# Lint + unit tests for hzforge.py. These run anywhere — no root, Apache,
+# packages, or DB needed (the script's system-touching paths are not exercised;
+# tests cover the pure logic, and the CLI is only checked for help/parse).
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hzforge.py'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'hzforge.py'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: lint + unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test deps
+        run: pip install pytest pyflakes
+
+      - name: Syntax check
+        run: python -m py_compile hzforge.py
+
+      - name: Lint (pyflakes)
+        run: pyflakes hzforge.py
+
+      - name: CLI smoke (help/parse, no root needed)
+        run: |
+          python hzforge.py --help >/dev/null
+          python hzforge.py install --help >/dev/null
+          python hzforge.py uninstall --help >/dev/null
+          python hzforge.py doctor --help >/dev/null
+          python hzforge.py repair --help >/dev/null
+
+      - name: Unit tests
+        run: pytest tests/ -q

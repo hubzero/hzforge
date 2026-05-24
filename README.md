@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/hubzero/hzforge/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/hubzero/hzforge/actions/workflows/tests.yml/badge.svg"></a>
   <a href="https://github.com/hubzero/hzforge/actions/workflows/docs.yml"><img alt="docs CI" src="https://github.com/hubzero/hzforge/actions/workflows/docs.yml/badge.svg"></a>
   <a href="https://hubzero.github.io/hzforge/"><img alt="documentation" src="https://img.shields.io/badge/docs-hubzero.github.io%2Fhzforge-2456c2?logo=github&logoColor=white"></a>
   <img alt="Python 3.6+" src="https://img.shields.io/badge/python-3.6%2B-3776ab?logo=python&logoColor=white">

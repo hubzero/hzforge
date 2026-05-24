@@ -1,0 +1,139 @@
+"""Unit tests for hzforge's pure logic (no root / Apache / packages needed).
+
+hzforge.py is imported as a module; only its side-effect-free helpers are
+exercised here. Anything that would touch the system (dnf, systemctl, apachectl,
+the filesystem under /etc or /opt) is either monkeypatched out or avoided.
+"""
+import importlib.util
+import os
+import pathlib
+import types
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def load_hz():
+    spec = importlib.util.spec_from_file_location("hzforge", ROOT / "hzforge.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+hz = load_hz()
+
+
+def make_args(**kw):
+    a = types.SimpleNamespace(
+        include_dir="/etc/httpd/help.conf.d",
+        trac_handler="mod_wsgi",
+        ldap_url=None, ldap_binddn=None, ldap_bindpw=None,
+        services=[],
+    )
+    for k, v in kw.items():
+        setattr(a, k, v)
+    return a
+
+
+def render(monkeypatch, svc, **kw):
+    """Render one service drop-in, capturing the written content."""
+    cap = {}
+    monkeypatch.setattr(hz, "ARGS", make_args(**kw), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "write_file",
+                        lambda p, c, mode, owner="root", group="root": cap.__setitem__("c", c) or True)
+    monkeypatch.setattr(hz, "makedir", lambda *a, **k: None)
+    monkeypatch.setattr(hz, "_trac_envs", lambda: ["histogram"])
+    hz.write_service_conf(svc)
+    return cap["c"]
+
+
+def test_all_services():
+    assert hz.ALL_SERVICES == ["svn", "git", "gitExternal", "trac"]
+
+
+def test_dropin_prefix_is_forge():
+    assert hz.DROPIN_PREFIX == "00-forge-"
+
+
+def test_dropin_path(monkeypatch):
+    monkeypatch.setattr(hz, "ARGS", make_args(include_dir="/etc/httpd/help.conf.d"), raising=False)
+    assert hz.dropin_path("trac") == "/etc/httpd/help.conf.d/00-forge-trac.conf"
+
+
+def test_svn_dropin(monkeypatch):
+    c = render(monkeypatch, "svn")
+    assert 'RewriteRule "^/tools/[^/]+/svn(/|$)" - [END]' in c   # <Location> shield
+    assert "IncludeOptional /etc/httpd/help.conf.d/svn/svn.conf" in c
+
+
+def test_git_dropin(monkeypatch):
+    c = render(monkeypatch, "git")
+    assert "IncludeOptional /etc/httpd/help.conf.d/git/git.conf" in c
+    assert "gitExternal" not in c          # git and gitExternal are separate files
+
+
+def test_gitexternal_dropin(monkeypatch):
+    c = render(monkeypatch, "gitExternal")
+    assert "IncludeOptional /etc/httpd/help.conf.d/git/gitExternal.conf" in c
+
+
+def test_trac_modwsgi_dropin(monkeypatch):
+    c = render(monkeypatch, "trac", trac_handler="mod_wsgi")
+    assert "WSGIDaemonProcess trac" in c
+    assert "WSGIScriptAliasMatch" in c
+    assert "/opt/trac/wsgi/hubtrac.wsgi" in c
+    assert "modpython_frontend" not in c
+    # alias self-diverts -> no [END] carve-out for trac under mod_wsgi
+    assert "[END]" not in c
+    for verb in ("wiki", "timeline", "browser", "ticket", "newticket", "query"):
+        assert verb in c
+
+
+def test_trac_modpython_dropin(monkeypatch):
+    c = render(monkeypatch, "trac", trac_handler="mod_python")
+    assert "trac.web.modpython_frontend" in c
+    assert "<Location /tools/histogram>" in c
+    assert "TracEnv /opt/trac/tools/histogram" in c
+    assert "[END]" in c                    # <Location> needs the verb shield
+    assert "WSGIScriptAliasMatch" not in c
+
+
+def test_detect_services_and_handler(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "ARGS", make_args(include_dir=str(tmp_path)), raising=False)
+    assert hz.detect_configured_services() == []
+    assert hz.detect_handler() is None
+    (tmp_path / "00-forge-svn.conf").write_text("# svn\nIncludeOptional x/svn/svn.conf\n")
+    (tmp_path / "00-forge-trac.conf").write_text("WSGIScriptAliasMatch ... hubtrac.wsgi\n")
+    assert set(hz.detect_configured_services()) == {"svn", "trac"}
+    assert hz.detect_handler() == "mod_wsgi"
+
+
+def test_detect_handler_modpython(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "ARGS", make_args(include_dir=str(tmp_path)), raising=False)
+    (tmp_path / "00-forge-trac.conf").write_text("PythonHandler trac.web.modpython_frontend\n")
+    assert hz.detect_handler() == "mod_python"
+
+
+def test_detect_legacy_trac_conf(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "ARGS", make_args(include_dir=str(tmp_path)), raising=False)
+    (tmp_path / "trac.conf").write_text("WSGIScriptAliasMatch ...\n")   # hand-made, no 00-forge-
+    assert "trac" in hz.detect_configured_services()
+
+
+@pytest.mark.parametrize("mode,expected", [(0o600, False), (0o640, False), (0o644, True), (0o755, True)])
+def test_other_can_read_file(tmp_path, mode, expected):
+    f = tmp_path / "f"
+    f.write_text("x")
+    os.chmod(str(f), mode)
+    assert hz._other_can_read(str(f)) is expected
+
+
+def test_other_can_read_dir(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    os.chmod(str(d), 0o700)
+    assert hz._other_can_read(str(d)) is False
+    os.chmod(str(d), 0o755)
+    assert hz._other_can_read(str(d)) is True
