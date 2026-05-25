@@ -940,7 +940,6 @@ def main():
     step("Done")
     for n in CTX.notes:
         print("[!] " + n)
-    log("Apache drop-ins: %s/%s*.conf" % (args.include_dir, DROPIN_PREFIX))
 
 
 if __name__ == "__main__":
