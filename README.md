@@ -70,7 +70,7 @@ sudo python3 hzforge.py repair                  # fix drift
 | Command | What it does |
 |---|---|
 | `install [services]` | Install packages, create `/opt/<svc>/tools` dirs (conventional perms), join `hzsvn`/`hzgit` groups if present, write the drop-in(s). No services = all. |
-| `uninstall <services> [--purge]` | Remove a service's drop-in (and, for trac, unload its interpreter). **Never** deletes repo data; `--purge` also removes packages/artifacts. |
+| `uninstall <services>` | Remove a service's drop-in (and, for trac, unload its interpreter) plus hzforge's own files for it (shim, egg cache, wandisco repo file). **Never** removes packages, the `hzsvn`/`hzgit` groups, or repo data. |
 | `doctor [services]` | Read-only diagnosis; exits non-zero on FAIL. Service checks scope to the request; global checks (`configtest`, interpreter state) always run. |
 | `repair [services]` | Diagnose, then re-assert the requested services and fix drift, then validate + reload/restart. |
 

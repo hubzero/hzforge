@@ -67,7 +67,7 @@
   <ul class="toc__list">
 <li class="toc__item toc__item--level-2"><a href="#commands">Commands</a></li>
 <li class="toc__item toc__item--level-3"><a href="#install-services">install `[services]`</a></li>
-<li class="toc__item toc__item--level-3"><a href="#uninstall-services-purge">uninstall `&lt;services&gt; [--purge]`</a></li>
+<li class="toc__item toc__item--level-3"><a href="#uninstall-services">uninstall `&lt;services&gt;`</a></li>
 <li class="toc__item toc__item--level-3"><a href="#doctor-services">doctor `[services]`</a></li>
 <li class="toc__item toc__item--level-3"><a href="#repair-services">repair `[services]`</a></li>
 <li class="toc__item toc__item--level-2"><a href="#options-install">Options (install)</a></li>
@@ -84,8 +84,7 @@ prerequisites before installing.</p>
 sudo python3 hzforge.py install trac                     # one service
 sudo python3 hzforge.py install svn git gitExternal trac
 sudo python3 hzforge.py install trac --trac-handler mod_python
-sudo python3 hzforge.py uninstall git                    # stop serving git (data kept)
-sudo python3 hzforge.py uninstall trac --purge           # also remove packages/artifacts
+sudo python3 hzforge.py uninstall git                    # stop serving git (packages/data kept)
 sudo python3 hzforge.py doctor                           # diagnose all configured
 sudo python3 hzforge.py doctor git                       # diagnose one service
 sudo python3 hzforge.py repair                           # fix drift
@@ -100,11 +99,11 @@ sudo python3 hzforge.py repair trac
 <code>hzsvn</code>/<code>hzgit</code> groups if present, and write the per-service drop-in(s). No
 services = all four. Consolidates a legacy standalone <code>trac.conf</code> into the trac
 drop-in.</p>
-<h3 id="uninstall-services-purge">uninstall <code>&lt;services&gt; [--purge]</code></h3>
-<p>Remove a service's drop-in (and, for trac, unload its interpreter module). <strong>Never
-deletes repository data</strong> under <code>/opt/&lt;svc&gt;/tools</code>. <code>--purge</code> additionally removes
-the installed packages, the wandisco repo file, and the WSGI shim — but still never
-the repo data.</p>
+<h3 id="uninstall-services">uninstall <code>&lt;services&gt;</code></h3>
+<p>Remove a service's drop-in (and, for trac, unload its interpreter module) plus the
+helper files hzforge created for it — for trac the WSGI shim and egg cache, for svn
+the wandisco repo file. <strong>Never</strong> removes packages, the <code>hzsvn</code>/<code>hzgit</code> groups, or
+repository data under <code>/opt/&lt;svc&gt;/tools</code> (only the config/serving is torn down).</p>
 <h3 id="doctor-services">doctor <code>[services]</code></h3>
 <p>Read-only diagnosis; exits non-zero if anything is <strong>FAIL</strong>. Service-specific checks
 are scoped to the requested services; global checks (<code>apachectl configtest</code>,
@@ -169,8 +168,8 @@ which the running server is left untouched).</li>
 <li><code>apachectl configtest</code> runs before any reload/restart; on failure hzforge aborts
 without touching the running server.</li>
 <li><code>--dry-run</code> previews every action; <code>--no-restart</code> stages changes without applying.</li>
-<li><code>uninstall</code> preserves repository data; <code>--purge</code> still never removes
-<code>/opt/&lt;svc&gt;/tools</code>.</li>
+<li><code>uninstall</code> never removes packages, the <code>hzsvn</code>/<code>hzgit</code> groups, or repository
+data under <code>/opt/&lt;svc&gt;/tools</code>.</li>
 </ul>
 
         </div>

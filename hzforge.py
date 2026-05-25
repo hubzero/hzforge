@@ -27,8 +27,7 @@ Run as root.  Services are positional; preview any command with --dry-run:
   hzforge install                            # no services = all
   hzforge install svn git gitExternal trac
   hzforge install trac svn --trac-handler mod_python
-  hzforge uninstall git                      # stop serving git (data kept)
-  hzforge uninstall trac --purge            # also remove packages/artifacts
+  hzforge uninstall git                      # stop serving git (packages/data kept)
   hzforge doctor                             # diagnose all (or: hzforge doctor git)
   hzforge repair                             # fix drift (or: hzforge repair trac)
 Bare `hzforge` (no command) prints help.
@@ -716,30 +715,16 @@ def uninstall(remove):
     ARGS.services = remaining
     for svc in remove:
         _remove_file(dropin_path(svc))      # each service is its own file
-    if "trac" in remove:
+    if "trac" in remove:                    # trac is a single service -> fully removed
         _disable_legacy_trac()
-    if "trac" in remove and "trac" not in remaining:
         (_ensure_modpython_unloaded if handler == "mod_python" else _ensure_modwsgi_unloaded)()
-    if ARGS.purge:
-        _purge(remove, handler)
-    apply_changes()
-    log("Repository DATA under /opt/<svc>/tools (svn/git repos, Trac envs) LEFT INTACT.")
-
-
-def _purge(remove, handler):
-    step("Purge packages & script artifacts  (repository DATA under /opt is NOT touched)")
-    if "trac" in remove:
-        _remove_file(SHIM_PATH)
+        _remove_file(SHIM_PATH)             # hzforge's own helper files for trac
         if os.path.isdir(EGG_CACHE):
             run(["rm", "-rf", EGG_CACHE], check=False)
-        for mc in (MODCONF_WSGI, MODCONF_PY):
-            _remove_file(mc); _remove_file(mc + ".disabled")
-        run(["dnf", "-y", "remove", "hubzero-trac", "hubzero-trac-mysqlauthz"], check=False)
-        run(["sh", "-c", "pip2 uninstall -y mod_wsgi Trac"], check=False)
     if "svn" in remove:
-        run(["dnf", "-y", "remove", "mod_dav_svn"], check=False)
-        _remove_file(WANDISCO_REPO_PATH)
-    warn("purge kept subversion/git/subversion-python and ALL /opt data; remove by hand if intended.")
+        _remove_file(WANDISCO_REPO_PATH)    # hzforge wrote this repo file
+    apply_changes()
+    log("Packages, the hzsvn/hzgit groups, and all /opt repo data were left intact.")
 
 
 def _chk(results, level, msg):
@@ -894,10 +879,8 @@ def build_parser():
     pi.add_argument("--ldap-bindpw", dest="ldap_bindpw")
     pi.add_argument("--force-pip", action="store_true")
 
-    pu = sub.add_parser("uninstall", parents=[common], help="remove services (data preserved)")
+    pu = sub.add_parser("uninstall", parents=[common], help="remove services (packages/data preserved)")
     pu.add_argument("services", nargs="*", metavar="SERVICE", help=svc_help + " to remove")
-    pu.add_argument("--purge", action="store_true",
-                    help="also remove packages/repo-file/shim (NEVER /opt repo data)")
 
     pd = sub.add_parser("doctor", parents=[common], help="diagnose (read-only); exit 1 if any FAIL")
     pd.add_argument("services", nargs="*", metavar="SERVICE",
@@ -920,7 +903,7 @@ def main():
     for attr, default in (("trac_handler", "mod_wsgi"), ("svn_source", "wandisco"),
                           ("trac_spec", TRAC_SPEC), ("modwsgi_spec", MODWSGI_SPEC),
                           ("ldap_url", None), ("ldap_binddn", None), ("ldap_bindpw", None),
-                          ("force_pip", False), ("purge", False)):
+                          ("force_pip", False)):
         if not hasattr(args, attr):
             setattr(args, attr, default)
 

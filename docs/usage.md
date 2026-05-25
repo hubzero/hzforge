@@ -11,8 +11,7 @@ sudo python3 hzforge.py install                          # all services
 sudo python3 hzforge.py install trac                     # one service
 sudo python3 hzforge.py install svn git gitExternal trac
 sudo python3 hzforge.py install trac --trac-handler mod_python
-sudo python3 hzforge.py uninstall git                    # stop serving git (data kept)
-sudo python3 hzforge.py uninstall trac --purge           # also remove packages/artifacts
+sudo python3 hzforge.py uninstall git                    # stop serving git (packages/data kept)
 sudo python3 hzforge.py doctor                           # diagnose all configured
 sudo python3 hzforge.py doctor git                       # diagnose one service
 sudo python3 hzforge.py repair                           # fix drift
@@ -33,11 +32,11 @@ Install packages, create `/opt/<svc>/tools` dirs (conventional perms), join
 services = all four. Consolidates a legacy standalone `trac.conf` into the trac
 drop-in.
 
-### uninstall `<services> [--purge]`
-Remove a service's drop-in (and, for trac, unload its interpreter module). **Never
-deletes repository data** under `/opt/<svc>/tools`. `--purge` additionally removes
-the installed packages, the wandisco repo file, and the WSGI shim — but still never
-the repo data.
+### uninstall `<services>`
+Remove a service's drop-in (and, for trac, unload its interpreter module) plus the
+helper files hzforge created for it — for trac the WSGI shim and egg cache, for svn
+the wandisco repo file. **Never** removes packages, the `hzsvn`/`hzgit` groups, or
+repository data under `/opt/<svc>/tools` (only the config/serving is torn down).
 
 ### doctor `[services]`
 Read-only diagnosis; exits non-zero if anything is **FAIL**. Service-specific checks
@@ -75,5 +74,5 @@ Common to all commands: `--hub <name>` (auto-detected from `sites.d`),
 - `apachectl configtest` runs before any reload/restart; on failure hzforge aborts
   without touching the running server.
 - `--dry-run` previews every action; `--no-restart` stages changes without applying.
-- `uninstall` preserves repository data; `--purge` still never removes
-  `/opt/<svc>/tools`.
+- `uninstall` never removes packages, the `hzsvn`/`hzgit` groups, or repository
+  data under `/opt/<svc>/tools`.
