@@ -49,6 +49,22 @@ TRAC_SPEC     = "Trac>=1.0,<1.1"     # match envs at DB schema 26 (no upgrade)
 MODWSGI_SPEC  = "mod_wsgi==4.9.4"    # last Python-2-capable mod_wsgi release
 ALL_SERVICES  = ["svn", "git", "gitExternal", "trac"]
 
+# Options that live only on the `install` subparser, with their defaults.
+# Single source of truth: build_parser() wires these defaults into the install
+# args, and main() backfills the same attrs onto the other subcommands
+# (uninstall/doctor/repair/test read them too).
+INSTALL_DEFAULTS = {
+    "trac_handler": "mod_wsgi",
+    "svn_source":   "wandisco",
+    "trac_spec":    TRAC_SPEC,
+    "modwsgi_spec": MODWSGI_SPEC,
+    "ldap_url":     None,
+    "ldap_binddn":  None,
+    "ldap_bindpw":  None,
+    "force_pip":    False,
+    "no_test":      False,
+}
+
 OPT = {
     "trac":        ("/opt/trac",          0o755),
     "trac_tools":  ("/opt/trac/tools",    0o750),
@@ -351,7 +367,8 @@ def _trac_modwsgi():
         log("mod_wsgi present (skip pip)")
     # shim
     makedir(WSGI_DIR, 0o755)
-    write_file(SHIM_PATH, SHIM_CONTENT, 0o644, "apache", "apache") and _mark()
+    if write_file(SHIM_PATH, SHIM_CONTENT, 0o644, "apache", "apache"):
+        _mark()
     # server-scope module config; ensure mod_python NOT loaded
     _ensure_modwsgi_loaded()
     _ensure_modpython_unloaded()
@@ -396,7 +413,8 @@ def _ensure_modwsgi_loaded():
                 'WSGIPythonHome "/usr"')
     content = ("# Python2 mod_wsgi -- managed by setup_tool_services.py\n"
                + load + "\n" + home + "\nWSGISocketPrefix run/wsgi\nWSGIRestrictEmbedded On\n")
-    write_file(MODCONF_WSGI, content, 0o644) and _mark()
+    if write_file(MODCONF_WSGI, content, 0o644):
+        _mark()
 
 
 def _ensure_modwsgi_unloaded():
@@ -409,7 +427,8 @@ def _ensure_modpython_loaded():
     if os.path.exists(dis) and not os.path.exists(MODCONF_PY):
         _rename(dis, MODCONF_PY)
     elif not os.path.exists(MODCONF_PY):
-        write_file(MODCONF_PY, "LoadModule python_module modules/mod_python.so\n", 0o644) and _mark()
+        if write_file(MODCONF_PY, "LoadModule python_module modules/mod_python.so\n", 0o644):
+            _mark()
 
 
 def _ensure_modpython_unloaded():
@@ -494,7 +513,8 @@ def write_service_conf(svc):
             L += ["", ab]
     content = "\n".join(L).rstrip() + "\n"
     step("Apache drop-in: %s" % dropin_path(svc))
-    write_file(dropin_path(svc), content, 0o640) and _mark()
+    if write_file(dropin_path(svc), content, 0o640):
+        _mark()
 
 
 def _trac_envs():
@@ -1036,13 +1056,13 @@ def doctor():
     ld = lambda b: "loaded" if b else "not loaded"
     if wsgi_disk and py_disk:
         _chk(r, "FAIL", "both mod_wsgi and mod_python enabled on disk -> httpd won't start (repair)")
-    for name, run, disk in (("mod_wsgi", wsgi_run, wsgi_disk),
-                            ("mod_python", py_run, py_disk)):
-        if run == disk:
+    for name, running, disk in (("mod_wsgi", wsgi_run, wsgi_disk),
+                                ("mod_python", py_run, py_disk)):
+        if running == disk:
             _chk(r, "OK", "%s: %s" % (name, ld(disk)))
         else:
             _chk(r, "WARN", "%s: on-disk %s but running %s -- restart pending (repair)"
-                 % (name, ld(disk), ld(run)))
+                 % (name, ld(disk), ld(running)))
 
     out = subprocess.run(["apachectl", "configtest"], stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
@@ -1157,11 +1177,11 @@ def build_parser():
     pi.add_argument("services", nargs="*", metavar="SERVICE",
                     help=svc_help + "; default: all")
     pi.add_argument("--trac-handler", choices=["mod_wsgi", "mod_python"],
-                    default="mod_wsgi", dest="trac_handler")
+                    default=INSTALL_DEFAULTS["trac_handler"], dest="trac_handler")
     pi.add_argument("--svn-source", choices=["wandisco", "appstream"],
-                    default="wandisco", dest="svn_source")
-    pi.add_argument("--trac-spec", default=TRAC_SPEC, dest="trac_spec")
-    pi.add_argument("--modwsgi-spec", default=MODWSGI_SPEC, dest="modwsgi_spec")
+                    default=INSTALL_DEFAULTS["svn_source"], dest="svn_source")
+    pi.add_argument("--trac-spec", default=INSTALL_DEFAULTS["trac_spec"], dest="trac_spec")
+    pi.add_argument("--modwsgi-spec", default=INSTALL_DEFAULTS["modwsgi_spec"], dest="modwsgi_spec")
     pi.add_argument("--ldap-url", dest="ldap_url")
     pi.add_argument("--ldap-binddn", dest="ldap_binddn")
     pi.add_argument("--ldap-bindpw", dest="ldap_bindpw")
@@ -1193,11 +1213,9 @@ def main():
         parser.print_help()                # bare `hzforge` or `--help` => top-level help
         sys.exit(0)
 
-    # fill attrs that only exist on some subparsers
-    for attr, default in (("trac_handler", "mod_wsgi"), ("svn_source", "wandisco"),
-                          ("trac_spec", TRAC_SPEC), ("modwsgi_spec", MODWSGI_SPEC),
-                          ("ldap_url", None), ("ldap_binddn", None), ("ldap_bindpw", None),
-                          ("force_pip", False), ("no_test", False)):
+    # install-only options live on one subparser; backfill their defaults so the
+    # other subcommands (which read them) have the attrs.
+    for attr, default in INSTALL_DEFAULTS.items():
         if not hasattr(args, attr):
             setattr(args, attr, default)
 
