@@ -69,10 +69,11 @@ sudo python3 hzforge.py repair                  # fix drift
 
 | Command | What it does |
 |---|---|
-| `install [services]` | Install packages, create `/opt/<svc>/tools` dirs (conventional perms), join `hzsvn`/`hzgit` groups if present, write the drop-in(s). No services = all. |
+| `install [services]` | Install packages, create `/opt/<svc>/tools` dirs (conventional perms), create the `hzsvn`/`hzgit` groups, write the drop-in(s). No services = all. After `install trac` it runs `test` automatically (skip with `--no-test`). |
 | `uninstall <services>` | Remove a service's drop-in (and, for trac, unload its interpreter) plus hzforge's own files for it (shim, egg cache, wandisco repo file). **Never** removes packages, the `hzsvn`/`hzgit` groups, or repo data. |
 | `doctor [services]` | Read-only diagnosis; exits non-zero on FAIL. Service checks scope to the request; global checks (`configtest`, interpreter state) always run. |
 | `repair [services]` | Diagnose, then re-assert the requested services and fix drift, then validate + reload/restart. |
+| `test` | Create a throwaway, uniquely-named Trac project, verify it serves over HTTP (`/tools/<name>/wiki` → 200), then remove it. Self-contained (needs no MySQL/forge provisioning). Exits non-zero on failure. |
 
 ### Install options
 

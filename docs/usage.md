@@ -16,6 +16,7 @@ sudo python3 hzforge.py doctor                           # diagnose all configur
 sudo python3 hzforge.py doctor git                       # diagnose one service
 sudo python3 hzforge.py repair                           # fix drift
 sudo python3 hzforge.py repair trac
+sudo python3 hzforge.py test                             # create a throwaway Trac project, verify, remove
 ```
 
 Preview any command without changing anything:
@@ -27,10 +28,11 @@ sudo python3 hzforge.py install --dry-run
 ## Commands
 
 ### install `[services]`
-Install packages, create `/opt/<svc>/tools` dirs (conventional perms), join
-`hzsvn`/`hzgit` groups if present, and write the per-service drop-in(s). No
-services = all four. Consolidates a legacy standalone `trac.conf` into the trac
-drop-in.
+Install packages, create `/opt/<svc>/tools` dirs (conventional perms), create the
+`hzsvn`/`hzgit` groups, and write the per-service drop-in(s). No services = all
+four. Consolidates a legacy standalone `trac.conf` into the trac drop-in. After
+installing trac it runs the **test** self-check automatically (skip with
+`--no-test`).
 
 ### uninstall `<services>`
 Remove a service's drop-in (and, for trac, unload its interpreter module) plus the
@@ -47,6 +49,14 @@ running-vs-on-disk interpreter state, a stray legacy `trac.conf`) always run.
 Diagnose, then re-assert the requested (configured) services — fixing missing
 shim/dirs, file permissions, and module state — then validate and reload/restart.
 `repair git` is isolated to git; it won't touch trac.
+
+### test
+End-to-end self-check for the Trac (mod_wsgi) handler: creates a throwaway,
+uniquely-named Trac environment under `/opt/trac/tools/`, fetches
+`/tools/<name>/wiki` over the hub's own vhost, asserts a `200` Trac response, then
+removes the environment. It needs no MySQL/forge provisioning — the WSGI shim
+serves any env generically — and exits non-zero on failure (handy for CI). Runs
+automatically at the end of `install trac`.
 
 ## Options (install)
 

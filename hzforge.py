@@ -30,6 +30,7 @@ Run as root.  Services are positional; preview any command with --dry-run:
   hzforge uninstall git                      # stop serving git (packages/data kept)
   hzforge doctor                             # diagnose all (or: hzforge doctor git)
   hzforge repair                             # fix drift (or: hzforge repair trac)
+  hzforge test                               # create a throwaway Trac project, verify, remove
 Bare `hzforge` (no command) prints help.
 """
 
@@ -58,6 +59,7 @@ OPT = {
     "gext_tools":  ("/opt/gitExternal/tools", 0o755),
 }
 
+TOOLS_DIR    = OPT["trac_tools"][0]   # /opt/trac/tools
 WSGI_DIR     = "/opt/trac/wsgi"
 SHIM_PATH    = os.path.join(WSGI_DIR, "hubtrac.wsgi")
 EGG_CACHE    = "/opt/trac/.egg-cache"
@@ -604,6 +606,32 @@ def _ondisk_module(key):
     return False
 
 
+def _systemd():
+    return os.path.isdir("/run/systemd/system")
+
+
+def _httpd_running():
+    return subprocess.run(["pgrep", "-x", "httpd"], stdout=subprocess.DEVNULL).returncode == 0
+
+
+def apache_apply(restart):
+    """Restart/reload httpd via systemd when it's the init, else apachectl (so the
+    same code path works in a container/chroot without systemd)."""
+    if _systemd():
+        run(["systemctl", "restart" if restart else "reload", "httpd"])
+    elif not _httpd_running():
+        run(["apachectl", "start"])
+    else:
+        run(["apachectl", "restart" if restart else "graceful"])
+
+
+def apache_active():
+    if _systemd():
+        return subprocess.run(["systemctl", "is-active", "httpd"], stdout=subprocess.PIPE,
+                              universal_newlines=True).stdout.strip()
+    return "active" if _httpd_running() else "inactive"
+
+
 def apply_changes():
     step("Validate and apply")
     # Full restart iff the RUNNING interpreter set differs from the on-disk
@@ -626,17 +654,16 @@ def apply_changes():
         return
     if need_restart:
         log("interpreter module set changed -> full restart")
-        run(["systemctl", "restart", "httpd"])
+        apache_apply(restart=True)
     elif CTX.config_changed:
         log("config changed, module set stable -> graceful reload")
-        run(["systemctl", "reload", "httpd"])
+        apache_apply(restart=False)
     else:
         log("nothing changed.")
-    active = subprocess.run(["systemctl", "is-active", "httpd"], stdout=subprocess.PIPE,
-                            universal_newlines=True).stdout.strip()
+    active = apache_active()
     log("httpd: " + active)
     if active != "active":
-        die("httpd not active after apply -- check journalctl -u httpd and error_log.")
+        die("httpd not active after apply -- check the error log / 'journalctl -u httpd'.")
 
 
 def detect_hub():
@@ -649,6 +676,78 @@ def detect_hub():
                 if m:
                     return m.group(1)
     return None
+
+
+# ---------------------------------------------------------------------------- #
+# test -- create a throwaway Trac project and verify it actually serves
+# ---------------------------------------------------------------------------- #
+def _vhost_target():
+    """Detect how to reach the hub's vhost: {ip, port, host, scheme} or None."""
+    path = "/etc/httpd/sites.d/%s-ssl.conf" % ARGS.hub
+    if not os.path.exists(path):
+        return None
+    t = open(path).read()
+    m = re.search(r"^\s*Listen\s+(?:(\S+):)?(\d+)", t, re.M)
+    if not m:
+        return None
+    sn = re.search(r"^\s*ServerName\s+(\S+)", t, re.M)
+    ip = m.group(1) or "127.0.0.1"
+    port = m.group(2)
+    return {"ip": ip, "port": port,
+            "host": sn.group(1) if sn else ip,
+            "scheme": "https" if port == "443" else "http"}
+
+
+def _curl(tgt, path):
+    """GET tgt+path (pinning host->ip), return (http_code, body)."""
+    fd, tmp = tempfile.mkstemp()
+    os.close(fd)
+    try:
+        code = subprocess.run(
+            ["curl", "-s", "-k", "--resolve", "%s:%s:%s" % (tgt["host"], tgt["port"], tgt["ip"]),
+             "-o", tmp, "-w", "%{http_code}",
+             "%s://%s%s" % (tgt["scheme"], tgt["host"], path)],
+            stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+        with open(tmp, errors="replace") as fh:
+            return code, fh.read()
+    finally:
+        os.unlink(tmp)
+
+
+def cmd_test():
+    """Create a throwaway, uniquely-named Trac env, verify it serves over HTTP, remove it.
+    Self-contained: needs no MySQL/forge provisioning (the WSGI shim serves any env)."""
+    if "trac" not in detect_configured_services():
+        die("trac is not configured here -- nothing to self-test (run 'install trac' first)")
+    if (detect_handler() or ARGS.trac_handler) != "mod_wsgi":
+        die("self-test currently supports the mod_wsgi handler only")
+    tgt = _vhost_target()
+    if not tgt:
+        die("could not detect the hub vhost (/etc/httpd/sites.d/%s-ssl.conf)" % ARGS.hub)
+    name = "hzforge-selftest-%d" % os.getpid()
+    env = os.path.join(TOOLS_DIR, name)
+    step("Self-test: throwaway Trac env '%s' via %s://%s" % (name, tgt["scheme"], tgt["host"]))
+    if CTX.dry:
+        log("[dry-run] would initenv %s, curl /tools/%s/wiki, then remove it" % (env, name))
+        return
+    if os.path.exists(env):
+        die("test env path already exists: %s" % env)
+    ok = False
+    try:
+        run(["trac-admin", env, "initenv", name, "sqlite:db/trac.db"], capture=True)
+        run(["chown", "-R", "apache:apache", env])
+        code, body = _curl(tgt, "/tools/%s/wiki" % name)
+        is_trac = code == "200" and ("Trac" in body or "Wiki" in body
+                                     or "powered by" in body.lower())
+        log("GET /tools/%s/wiki -> HTTP %s%s" % (name, code, "  (Trac)" if is_trac else ""))
+        ok = is_trac
+    finally:
+        if os.path.isdir(env):
+            run(["rm", "-rf", env], check=False)
+            log("removed throwaway env")
+    if not ok:
+        die("self-test FAILED -- Trac did not serve the throwaway env")
+    step("Self-test PASSED")
 
 
 # ---------------------------------------------------------------------------- #
@@ -701,6 +800,10 @@ def do_install():
     fix_pip_perms()
     write_dropin(s)
     apply_changes()
+    # verify trac actually serves, unless suppressed / not applicable
+    if ("trac" in s and ARGS.trac_handler == "mod_wsgi"
+            and not ARGS.no_test and not ARGS.no_restart and not CTX.dry):
+        cmd_test()
 
 
 def uninstall(remove):
@@ -878,6 +981,8 @@ def build_parser():
     pi.add_argument("--ldap-binddn", dest="ldap_binddn")
     pi.add_argument("--ldap-bindpw", dest="ldap_bindpw")
     pi.add_argument("--force-pip", action="store_true")
+    pi.add_argument("--no-test", action="store_true",
+                    help="skip the post-install Trac self-test")
 
     pu = sub.add_parser("uninstall", parents=[common], help="remove services (packages/data preserved)")
     pu.add_argument("services", nargs="*", metavar="SERVICE", help=svc_help + " to remove")
@@ -888,6 +993,8 @@ def build_parser():
     prp = sub.add_parser("repair", parents=[common], help="diagnose then fix drift")
     prp.add_argument("services", nargs="*", metavar="SERVICE",
                      help=svc_help + " to re-assert; default: all configured")
+    sub.add_parser("test", parents=[common],
+                   help="create a throwaway Trac project and verify it serves")
     return p
 
 
@@ -903,7 +1010,7 @@ def main():
     for attr, default in (("trac_handler", "mod_wsgi"), ("svn_source", "wandisco"),
                           ("trac_spec", TRAC_SPEC), ("modwsgi_spec", MODWSGI_SPEC),
                           ("ldap_url", None), ("ldap_binddn", None), ("ldap_bindpw", None),
-                          ("force_pip", False)):
+                          ("force_pip", False), ("no_test", False)):
         if not hasattr(args, attr):
             setattr(args, attr, default)
 
@@ -914,7 +1021,7 @@ def main():
     args.include_dir = "/etc/httpd/%s.conf.d" % args.hub
     # services come in as bare positional args (a list); allow comma-joined too
     services = []
-    for tok in (args.services or []):
+    for tok in (getattr(args, "services", None) or []):   # 'test' has no positional
         services += [s for s in tok.split(",") if s]
     bad = [s for s in services if s not in ALL_SERVICES]
     if bad:
@@ -942,6 +1049,8 @@ def main():
         sys.exit(0 if ok else 1)
     elif args.command == "repair":
         repair()
+    elif args.command == "test":
+        cmd_test()
 
     step("Done")
     for n in CTX.notes:
