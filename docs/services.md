@@ -6,7 +6,8 @@ uninstall, and diagnose them separately.
 Shared setup for every service (modeled on `hzcms`):
 
 - create `/opt/<svc>/tools` with hzcms's permissions;
-- join the web user + `apps` to `hzsvn` / `hzgit` groups **if those groups exist**;
+- create the `hzsvn` / `hzgit` group if missing (forge `chgrp`s repos to it; the
+  `apache` + `apps` membership those repos need is provisioned by the forge setup);
 - create the `<hub>.conf.d/{svn,git}` include dirs (0700, apache);
 - write `00-forge-<svc>.conf` and validate + reload.
 

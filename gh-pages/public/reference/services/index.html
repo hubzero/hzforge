@@ -77,7 +77,8 @@ uninstall, and diagnose them separately.</p>
 <p>Shared setup for every service (modeled on <code>hzcms</code>):</p>
 <ul>
 <li>create <code>/opt/&lt;svc&gt;/tools</code> with hzcms's permissions;</li>
-<li>join the web user + <code>apps</code> to <code>hzsvn</code> / <code>hzgit</code> groups <strong>if those groups exist</strong>;</li>
+<li>create the <code>hzsvn</code> / <code>hzgit</code> group if missing (forge <code>chgrp</code>s repos to it; the
+<code>apache</code> + <code>apps</code> membership those repos need is provisioned by the forge setup);</li>
 <li>create the <code>&lt;hub&gt;.conf.d/{svn,git}</code> include dirs (0700, apache);</li>
 <li>write <code>00-forge-&lt;svc&gt;.conf</code> and validate + reload.</li>
 </ul>

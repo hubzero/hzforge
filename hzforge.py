@@ -216,11 +216,12 @@ def write_file(path, content, mode, owner="root", group="root"):
     return True
 
 
-def add_to_group_if_present(group, users):
+def ensure_group(group):
+    """Create the group if missing. Forge chgrp's repos to it (hzgit for git,
+    hzsvn for svn); group *membership* (apache, apps) is provisioned by the forge
+    setup, not here."""
     if not group_exists(group):
-        log("group %s absent -> skip membership (matches hzcms)" % group); return
-    for u in users:
-        run(["usermod", "-aG", group, u], check=False)
+        run(["groupadd", group])
 
 
 # ---------------------------------------------------------------------------- #
@@ -275,7 +276,7 @@ def ensure_subversion_packages():
 def setup_svn():
     step("Subversion (DAV) -- packages, group, dirs")
     ensure_subversion_packages()
-    add_to_group_if_present("hzsvn", ["apps", "apache"])
+    ensure_group("hzsvn")
     makedir(*OPT["svn"]); makedir(*OPT["svn_tools"])
     makedir(os.path.join(ARGS.include_dir, "svn"), 0o700)
 
@@ -284,15 +285,16 @@ def setup_git():
     step("Git (local) -- package, group, dirs")
     if not rpm_installed("git"):
         dnf_install(["git"])
-    add_to_group_if_present("hzgit", ["apps", "apache"])
+    ensure_group("hzgit")
     makedir(*OPT["git"]); makedir(*OPT["git_tools"])
     makedir(os.path.join(ARGS.include_dir, "git"), 0o700)
 
 
 def setup_gitexternal():
-    step("Git (external) -- dirs")
+    step("Git (external) -- group, dirs")
     if not rpm_installed("git"):
         dnf_install(["git"])
+    ensure_group("hzgit")
     makedir(*OPT["gext"]); makedir(*OPT["gext_tools"])
     makedir(os.path.join(ARGS.include_dir, "git"), 0o700)
 
@@ -408,7 +410,7 @@ def write_service_conf(svc):
     inc = ARGS.include_dir
     verbs = "|".join(TRAC_VERBS)
     L = ["# HUBzero '%s' service -- managed by hzforge" % svc,
-         "# Self-contained drop-in (vhost scope); independent of the m4 template / hzcms.",
+         "# Self-contained drop-in (vhost scope); independent of the m4 vhost template.",
          "RewriteEngine On",
          ""]
     if svc == "svn":
@@ -616,40 +618,6 @@ def apply_changes():
         die("httpd not active after apply -- check journalctl -u httpd and error_log.")
 
 
-def smoke_test():
-    if CTX.dry or ARGS.no_restart:
-        return
-    step("Smoke test")
-    ip, fqdn = _vhost_target()
-    if not (ip and fqdn):
-        warn("could not detect listen IP / ServerName; skipping smoke test"); return
-    env = ARGS.test_env
-    checks = []
-    if "trac" in ARGS.services:
-        checks += [("trac wiki", "/tools/%s/wiki" % env),
-                   ("trac browser", "/tools/%s/browser" % env),
-                   ("cms (bare)", "/tools/%s" % env)]
-    if "svn" in ARGS.services:
-        checks += [("svn", "/tools/%s/svn" % env)]
-    for label, path in checks:
-        code = subprocess.run(
-            ["curl", "-k", "-s", "--resolve", "%s:443:%s" % (fqdn, ip),
-             "-o", "/dev/null", "-w", "%{http_code}", "https://%s%s" % (fqdn, path)],
-            stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
-        log("%-12s %s -> HTTP %s" % (label, path, code))
-
-
-def _vhost_target():
-    path = "/etc/httpd/sites.d/%s-ssl.conf" % ARGS.hub
-    if not os.path.exists(path):
-        return None, None
-    with open(path) as fh:
-        t = fh.read()
-    ip = re.search(r"^\s*Listen\s+(\S+):443", t, re.M)
-    sn = re.search(r"^\s*ServerName\s+(\S+)", t, re.M)
-    return (ip.group(1) if ip else None), (sn.group(1) if sn else None)
-
-
 def detect_hub():
     sites = "/etc/httpd/sites.d"
     if os.path.isdir(sites):
@@ -712,7 +680,6 @@ def do_install():
     fix_pip_perms()
     write_dropin(s)
     apply_changes()
-    smoke_test()
 
 
 def uninstall(remove):
@@ -874,7 +841,6 @@ def repair():
     fix_pip_perms()
     write_dropin(target)                         # per-service: only the targeted files
     apply_changes()
-    smoke_test()
     step("Re-check after repair")
     doctor()
 
@@ -883,7 +849,6 @@ def repair():
 def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--hub")
-    common.add_argument("--test-env", default="histogram", dest="test_env")
     common.add_argument("--no-restart", action="store_true")
     common.add_argument("--dry-run", action="store_true", dest="dry")
 
@@ -976,8 +941,7 @@ def main():
     step("Done")
     for n in CTX.notes:
         print("[!] " + n)
-    log("Config: %s/%s<svc>.conf (one per service). Independent of m4/hzcms."
-        % (args.include_dir, DROPIN_PREFIX))
+    log("Apache drop-ins: %s/%s*.conf" % (args.include_dir, DROPIN_PREFIX))
 
 
 if __name__ == "__main__":
