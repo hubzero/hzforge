@@ -3,6 +3,9 @@
 Run as **root** (`sudo`). Services are **positional** (space- or comma-separated).
 A bare `hzforge` prints help.
 
+See [Requirements](requirements.md) for host, Python, package, and network
+prerequisites before installing.
+
 ```
 sudo python3 hzforge.py install                          # all services
 sudo python3 hzforge.py install trac                     # one service
