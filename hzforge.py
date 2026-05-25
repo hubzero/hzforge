@@ -785,13 +785,16 @@ def doctor():
 
     wsgi_disk, py_disk = _ondisk_module("wsgi_module"), _ondisk_module("python_module")
     wsgi_run, py_run = running_has_so("mod_wsgi"), running_has_so("mod_python")
+    ld = lambda b: "loaded" if b else "not loaded"
     if wsgi_disk and py_disk:
-        _chk(r, "FAIL", "mod_wsgi AND mod_python both enabled on disk -> httpd won't start (repair)")
+        _chk(r, "FAIL", "both mod_wsgi and mod_python enabled on disk -> httpd won't start (repair)")
     if wsgi_disk != wsgi_run or py_disk != py_run:
-        _chk(r, "WARN", "running interpreters (wsgi=%s py=%s) != on-disk (wsgi=%s py=%s); restart pending (repair)"
-             % (wsgi_run, py_run, wsgi_disk, py_disk))
+        _chk(r, "WARN", "interpreters differ from disk -- running (mod_wsgi %s, mod_python %s), "
+             "on-disk (mod_wsgi %s, mod_python %s); restart pending (repair)"
+             % (ld(wsgi_run), ld(py_run), ld(wsgi_disk), ld(py_disk)))
     else:
-        _chk(r, "OK", "interpreters: wsgi=%s python=%s (running matches disk)" % (wsgi_disk, py_disk))
+        _chk(r, "OK", "interpreters: mod_wsgi %s, mod_python %s (running matches disk)"
+             % (ld(wsgi_disk), ld(py_disk)))
 
     out = subprocess.run(["apachectl", "configtest"], stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
