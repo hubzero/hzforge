@@ -755,7 +755,8 @@ def _purge(remove, handler):
 
 def _chk(results, level, msg):
     results.append((level, msg))
-    print("    %-7s %s" % ({"OK": "[ ok ]", "WARN": "[warn]", "FAIL": "[FAIL]"}[level], msg))
+    print("    %-7s %s" % ({"INFO": "[info]", "OK": "[ ok ]",
+                            "WARN": "[warn]", "FAIL": "[FAIL]"}[level], msg))
 
 
 def doctor():
@@ -768,9 +769,9 @@ def doctor():
     legacy = os.path.join(inc, "trac.conf")
     if os.path.exists(legacy):
         _chk(r, "WARN", "standalone %s present -> consolidate via 'install' (avoid duplicate WSGI)" % legacy)
-    _chk(r, "OK", "configured services: %s" % (",".join(services) or "(none)"))
+    _chk(r, "INFO", "configured services: %s" % (",".join(services) or "(none)"))
     if ARGS.services:
-        _chk(r, "OK", "scope: %s" % " ".join(target))
+        _chk(r, "INFO", "scope: %s" % " ".join(target))
         for s in ARGS.services:
             if s not in services:
                 _chk(r, "WARN", "'%s' requested but not currently configured" % s)
@@ -780,7 +781,7 @@ def doctor():
         _chk(r, "OK" if present else "WARN",
              "%s drop-in %s" % (svc, "present" if present else "%s ABSENT (run install)" % p))
     if "trac" in target:
-        _chk(r, "OK", "trac handler: %s" % (handler or "n/a"))
+        _chk(r, "INFO", "trac handler: %s" % (handler or "n/a"))
 
     wsgi_disk, py_disk = _ondisk_module("wsgi_module"), _ondisk_module("python_module")
     wsgi_run, py_run = running_has_so("mod_wsgi"), running_has_so("mod_python")
