@@ -50,12 +50,24 @@ jobs:
           rpm --import https://packages.hubzero.org/rpm/hubzero-rpm-key-pub-2025
           # python3 to run hzforge; python2 stack for Trac; build deps for pip mod_wsgi
           dnf -y install python3 \
-            httpd httpd-devel mod_ssl \
+            httpd httpd-devel mod_ssl openssl \
             python2 python2-pip python2-devel gcc redhat-rpm-config \
             procps-ng which findutils
 
       - name: Runtime dirs (no systemd-tmpfiles in a container)
         run: mkdir -p /run/httpd && chown apache:apache /run/httpd
+
+      - name: Self-signed localhost cert for stock ssl.conf
+        # mod_ssl ships /etc/httpd/conf.d/ssl.conf referencing localhost.crt/.key;
+        # the post-install scriptlet that normally generates them doesn't run in
+        # a container, so configtest fails until we create them ourselves.
+        run: |
+          set -eux
+          openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -keyout /etc/pki/tls/private/localhost.key \
+            -out /etc/pki/tls/certs/localhost.crt \
+            -subj "/CN=localhost"
+          chmod 600 /etc/pki/tls/private/localhost.key
 
       - name: Stage a minimal hub vhost
         run: |
