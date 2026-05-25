@@ -970,8 +970,12 @@ def uninstall(remove):
     actual = [s for s in remove if s in configured]      # only what's actually wired
     skipped = [s for s in remove if s not in configured]
     if not actual:
-        step("Uninstall: %s not configured (configured=%s) -- nothing to do"
-             % (",".join(remove), ",".join(configured) or "-"))
+        if configured:
+            step("Uninstall: %s not configured here (configured: %s) -- nothing to do"
+                 % (",".join(remove), ",".join(configured)))
+        else:
+            step("Uninstall: no hzforge services configured here -- nothing to do "
+                 "(requested: %s)" % ",".join(remove))
         return                              # leave the running server untouched
     remaining = [x for x in configured if x not in actual]
     skip = "  [skipping %s: not configured]" % ",".join(skipped) if skipped else ""
