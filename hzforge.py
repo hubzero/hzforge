@@ -36,8 +36,11 @@ Bare `hzforge` (no command) prints help.
 """
 
 import argparse
+import grp
 import os
+import pwd
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -138,16 +141,26 @@ class Ctx:
 CTX = None
 ARGS = None
 
-def log(m):   print("    " + m)
-def step(m):  print("\n==> " + m)
-def warn(m):  print("[!] " + m); CTX.notes.append(m)
-def die(m):   print("[FATAL] " + m); sys.exit(1)
+def log(m):
+    print("    " + m)
+
+def step(m):
+    print("\n==> " + m)
+
+def warn(m):
+    print("[!] " + m)
+    CTX.notes.append(m)
+
+def die(m):
+    print("[FATAL] " + m)
+    sys.exit(1)
 
 
 def run(cmd, check=True, capture=False, mutating=True):
     pretty = " ".join(cmd)
     if mutating and CTX.dry:
-        log("[dry-run] " + pretty); return ""
+        log("[dry-run] " + pretty)
+        return ""
     log("$ " + pretty)
     res = subprocess.run(cmd, stdout=subprocess.PIPE if capture else None,
                          stderr=subprocess.STDOUT if capture else None,
@@ -155,7 +168,7 @@ def run(cmd, check=True, capture=False, mutating=True):
     if check and res.returncode != 0:
         if capture and res.stdout:
             print(res.stdout)
-        die("command failed (rc=%d): %s" % (res.returncode, pretty))
+        die(f"command failed (rc={res.returncode}): {pretty}")
     return (res.stdout or "") if capture else ""
 
 
@@ -169,7 +182,7 @@ def group_exists(g):
 
 
 def py2_can_import(mod):
-    return subprocess.run(["python2", "-c", "import %s" % mod],
+    return subprocess.run(["python2", "-c", f"import {mod}"],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
@@ -179,7 +192,7 @@ def running_has_so(soname):
                           universal_newlines=True).stdout.split()
     for pid in pids:
         try:
-            with open("/proc/%s/maps" % pid) as fh:
+            with open(f"/proc/{pid}/maps") as fh:
                 if soname in fh.read():
                     return True
         except OSError:
@@ -188,7 +201,6 @@ def running_has_so(soname):
 
 
 def makedir(path, mode, owner="apache", group="apache"):
-    import pwd, grp, stat
     if os.path.isdir(path):
         st = os.stat(path)
         if (stat.S_IMODE(st.st_mode) == mode and
@@ -196,16 +208,16 @@ def makedir(path, mode, owner="apache", group="apache"):
                 st.st_gid == grp.getgrnam(group).gr_gid):
             return
     if CTX.dry:
-        log("[dry-run] mkdir %s (mode %o, %s:%s)" % (path, mode, owner, group)); return
+        log(f"[dry-run] mkdir {path} (mode {mode:o}, {owner}:{group})")
+        return
     if not os.path.isdir(path):
         os.makedirs(path)
     os.chmod(path, mode)
     os.chown(path, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
-    log("dir: %s (%o %s:%s)" % (path, mode, owner, group))
+    log(f"dir: {path} ({mode:o} {owner}:{group})")
 
 
 def write_file(path, content, mode, owner="root", group="root"):
-    import pwd, grp, stat
     cur = None
     if os.path.exists(path):
         with open(path) as fh:
@@ -217,9 +229,11 @@ def write_file(path, content, mode, owner="root", group="root"):
               st.st_uid == pwd.getpwnam(owner).pw_uid and
               st.st_gid == grp.getgrnam(group).gr_gid)
     if ok:
-        log("unchanged: " + path); return False
+        log("unchanged: " + path)
+        return False
     if CTX.dry:
-        log("[dry-run] write %s (mode %o, %s:%s)" % (path, mode, owner, group)); return True
+        log(f"[dry-run] write {path} (mode {mode:o}, {owner}:{group})")
+        return True
     d = os.path.dirname(path)
     if not os.path.isdir(d):
         os.makedirs(d)
@@ -317,7 +331,8 @@ def setup_svn():
     step("Subversion (DAV) -- packages, group, dirs")
     ensure_subversion_packages()
     ensure_group("hzsvn")
-    makedir(*OPT["svn"]); makedir(*OPT["svn_tools"])
+    makedir(*OPT["svn"])
+    makedir(*OPT["svn_tools"])
     makedir(os.path.join(ARGS.include_dir, "svn"), 0o700)
 
 
@@ -326,7 +341,8 @@ def setup_git():
     if not rpm_installed("git"):
         dnf_install(["git"])
     ensure_group("hzgit")
-    makedir(*OPT["git"]); makedir(*OPT["git_tools"])
+    makedir(*OPT["git"])
+    makedir(*OPT["git_tools"])
     makedir(os.path.join(ARGS.include_dir, "git"), 0o700)
 
 
@@ -335,12 +351,13 @@ def setup_gitexternal():
     if not rpm_installed("git"):
         dnf_install(["git"])
     ensure_group("hzgit")
-    makedir(*OPT["gext"]); makedir(*OPT["gext_tools"])
+    makedir(*OPT["gext"])
+    makedir(*OPT["gext_tools"])
     makedir(os.path.join(ARGS.include_dir, "git"), 0o700)
 
 
 def setup_trac():
-    step("Trac -- packages, dirs, handler (%s)" % ARGS.trac_handler)
+    step(f"Trac -- packages, dirs, handler ({ARGS.trac_handler})")
     # plugins (HubzeroPermissionStore + hubzeroplugin); hubzero-trac rpm-requires
     # subversion-devel, so the svn source must be enabled -- but we do NOT install
     # the svn repo browser bindings here. Trac runs fine without them; the browser
@@ -348,7 +365,8 @@ def setup_trac():
     if not rpm_installed("hubzero-trac"):
         _enable_svn_source()
         dnf_install(["hubzero-trac"], enablerepo=_svn_repo())
-    makedir(*OPT["trac"]); makedir(*OPT["trac_tools"])
+    makedir(*OPT["trac"])
+    makedir(*OPT["trac_tools"])
     if ARGS.trac_handler == "mod_wsgi":
         _trac_modwsgi()
     else:
@@ -360,9 +378,9 @@ def _trac_modwsgi():
     if py2_can_import("trac") and not ARGS.force_pip:
         log("Trac importable (skip pip; --force-pip to reinstall)")
     else:
-        run(["sh", "-c", "umask 022; pip2 install '%s'" % ARGS.trac_spec])
+        run(["sh", "-c", f"umask 022; pip2 install '{ARGS.trac_spec}'"])
     if not os.path.exists(_modwsgi_so()) and not py2_can_import("mod_wsgi"):
-        run(["sh", "-c", "umask 022; pip2 install '%s'" % ARGS.modwsgi_spec])
+        run(["sh", "-c", f"umask 022; pip2 install '{ARGS.modwsgi_spec}'"])
     else:
         log("mod_wsgi present (skip pip)")
     # shim
@@ -382,7 +400,7 @@ def _trac_modpython():
     if py2_can_import("trac") and not ARGS.force_pip:
         log("Trac importable (skip pip; --force-pip to reinstall)")
     else:
-        run(["sh", "-c", "umask 022; pip2 install '%s'" % ARGS.trac_spec])
+        run(["sh", "-c", f"umask 022; pip2 install '{ARGS.trac_spec}'"])
     if not rpm_installed("mod_python"):
         dnf_install(["mod_python"])
     makedir(EGG_CACHE, 0o755)
@@ -438,9 +456,10 @@ def _ensure_modpython_unloaded():
 
 def _rename(a, b):
     if CTX.dry:
-        log("[dry-run] mv %s -> %s" % (a, b))
+        log(f"[dry-run] mv {a} -> {b}")
     else:
-        os.rename(a, b); log("mv %s -> %s" % (a, b))
+        os.rename(a, b)
+        log(f"mv {a} -> {b}")
     _mark()
 
 
@@ -465,7 +484,7 @@ def write_dropin(services):
 def write_service_conf(svc):
     inc = ARGS.include_dir
     verbs = "|".join(TRAC_VERBS)
-    L = ["# HUBzero '%s' service -- managed by hzforge" % svc,
+    L = [f"# HUBzero '{svc}' service -- managed by hzforge",
          "# Self-contained drop-in (vhost scope); independent of the m4 vhost template.",
          "RewriteEngine On",
          ""]
@@ -473,46 +492,46 @@ def write_service_conf(svc):
         L += ['# DAV-svn is a <Location> handler -> shield from the CMS catch-all rewrite',
               'RewriteRule "^/tools/[^/]+/svn(/|$)" - [END]',
               "",
-              "IncludeOptional %s/svn/svn.conf" % inc]
+              f"IncludeOptional {inc}/svn/svn.conf"]
     elif svc == "git":
         L += ['# git http-backend (ScriptAliasMatch self-diverts; shield non-protocol paths)',
               'RewriteRule "^/tools/[^/]+/git(/|$)" - [END]',
               "",
-              "IncludeOptional %s/git/git.conf" % inc]
+              f"IncludeOptional {inc}/git/git.conf"]
     elif svc == "gitExternal":
         L += ['RewriteRule "^/tools/[^/]+/gitExternal(/|$)" - [END]',
               "",
-              "IncludeOptional %s/git/gitExternal.conf" % inc]
+              f"IncludeOptional {inc}/git/gitExternal.conf"]
     elif svc == "trac":
         if ARGS.trac_handler == "mod_wsgi":
             L += ["# Trac via mod_wsgi (WSGIScriptAliasMatch self-diverts; no carve-out needed)",
                   "WSGIDaemonProcess trac user=apache group=apache processes=2 threads=15 "
                   "python-home=/usr display-name=%{GROUP}",
                   "WSGIApplicationGroup %{GLOBAL}",
-                  'WSGIScriptAliasMatch "^/tools/[^/]+(?=/(?:%s)(?:/|$))" %s process-group=trac'
-                  % (verbs, SHIM_PATH),
-                  "<Directory %s>" % WSGI_DIR,
+                  f'WSGIScriptAliasMatch "^/tools/[^/]+(?=/(?:{verbs})(?:/|$))" '
+                  f'{SHIM_PATH} process-group=trac',
+                  f"<Directory {WSGI_DIR}>",
                   "    <Files hubtrac.wsgi>",
                   "        Require all granted",
                   "    </Files>",
                   "</Directory>"]
         else:
             L += ["# Trac via mod_python -- <Location> per env; shield verbs from the CMS rewrite",
-                  'RewriteRule "^/tools/[^/]+/(%s)(/|$)" - [END]' % verbs,
-                  "PythonOption PYTHON_EGG_CACHE %s" % EGG_CACHE]
+                  f'RewriteRule "^/tools/[^/]+/({verbs})(/|$)" - [END]',
+                  f"PythonOption PYTHON_EGG_CACHE {EGG_CACHE}"]
             for env in _trac_envs():
-                L += ["<Location /tools/%s>" % env,
+                L += [f"<Location /tools/{env}>",
                       "    SetHandler mod_python",
                       "    PythonHandler trac.web.modpython_frontend",
                       "    PythonInterpreter main_interpreter",
-                      "    PythonOption TracEnv /opt/trac/tools/%s" % env,
-                      "    PythonOption TracUriRoot /tools/%s" % env,
+                      f"    PythonOption TracEnv /opt/trac/tools/{env}",
+                      f"    PythonOption TracUriRoot /tools/{env}",
                       "</Location>"]
         ab = _auth_block()
         if ab:
             L += ["", ab]
     content = "\n".join(L).rstrip() + "\n"
-    step("Apache drop-in: %s" % dropin_path(svc))
+    step(f"Apache drop-in: {dropin_path(svc)}")
     if write_file(dropin_path(svc), content, 0o640):
         _mark()
 
@@ -566,7 +585,6 @@ def _grep_conf(directive):
 # ---------------------------------------------------------------------------- #
 def _other_can_read(path):
     """Can a non-owner/non-group user (i.e. apache) read/traverse this path?"""
-    import stat
     try:
         st = os.stat(path)
     except OSError:
@@ -734,10 +752,11 @@ def detect_hub():
 # ---------------------------------------------------------------------------- #
 def _vhost_target():
     """Detect how to reach the hub's vhost: {ip, port, host, scheme} or None."""
-    path = "/etc/httpd/sites.d/%s-ssl.conf" % ARGS.hub
+    path = f"/etc/httpd/sites.d/{ARGS.hub}-ssl.conf"
     if not os.path.exists(path):
         return None
-    t = open(path).read()
+    with open(path) as fh:
+        t = fh.read()
     m = re.search(r"^\s*Listen\s+(?:(\S+):)?(\d+)", t, re.M)
     if not m:
         return None
@@ -755,9 +774,9 @@ def _curl(tgt, path):
     os.close(fd)
     try:
         code = subprocess.run(
-            ["curl", "-s", "-k", "--resolve", "%s:%s:%s" % (tgt["host"], tgt["port"], tgt["ip"]),
+            ["curl", "-s", "-k", "--resolve", f"{tgt['host']}:{tgt['port']}:{tgt['ip']}",
              "-o", tmp, "-w", "%{http_code}",
-             "%s://%s%s" % (tgt["scheme"], tgt["host"], path)],
+             f"{tgt['scheme']}://{tgt['host']}{path}"],
             stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
         with open(tmp, errors="replace") as fh:
             return code, fh.read()
@@ -777,14 +796,14 @@ def _reload_for_test(why):
     out = run(["apachectl", "configtest"], capture=True, check=False, mutating=False)
     if "Syntax OK" not in out:
         print("    " + out.strip().replace("\n", "\n    "))
-        die("self-test route failed configtest (%s) -- running server untouched" % why)
+        die(f"self-test route failed configtest ({why}) -- running server untouched")
     apache_apply(restart=False)
 
 
 def _svn_route(name, repo):
-    return ['<Location /tools/%s/svn>' % name,
+    return [f'<Location /tools/{name}/svn>',
             '    DAV svn',
-            '    SVNPath %s' % repo,
+            f'    SVNPath {repo}',
             '    Require all granted',          # throwaway repo, removed right after
             '</Location>', '']
 
@@ -793,11 +812,11 @@ def _git_route(svc, name, root, reponame):
     # http-backend route for the throwaway repo, mirroring the MySQL-generated conf.
     # On-disk layout differs by service: git -> <name>.git, gitExternal -> <name>
     # (passed in as reponame), so the CGI PATH_INFO must match.
-    return ['SetEnvIf Request_URI "^/tools/%s/%s/%s/" GIT_PROJECT_ROOT=%s' % (name, svc, name, root),
+    return [f'SetEnvIf Request_URI "^/tools/{name}/{svc}/{name}/" GIT_PROJECT_ROOT={root}',
             'SetEnv GIT_HTTP_EXPORT_ALL',
-            'ScriptAliasMatch "^/tools/%s/%s/%s/(.*)$" '
-            '/usr/libexec/git-core/git-http-backend/%s/$1' % (name, svc, name, reponame),
-            '<LocationMatch "^/tools/%s/%s">' % (name, svc),
+            f'ScriptAliasMatch "^/tools/{name}/{svc}/{name}/(.*)$" '
+            f'/usr/libexec/git-core/git-http-backend/{reponame}/$1',
+            f'<LocationMatch "^/tools/{name}/{svc}">',
             '    Require all granted',          # anonymous read for the throwaway repo
             '</LocationMatch>', '']
 
@@ -805,37 +824,37 @@ def _git_route(svc, name, root, reponame):
 def _trac_modpython_route(name, env):
     # per-env <Location> for the legacy mod_python handler (mirrors the install block);
     # mod_wsgi needs none of this -- its generic WSGIScriptAliasMatch serves any env.
-    return ['<Location /tools/%s>' % name,
+    return [f'<Location /tools/{name}>',
             '    SetHandler mod_python',
             '    PythonHandler trac.web.modpython_frontend',
             '    PythonInterpreter main_interpreter',
-            '    PythonOption TracEnv %s' % env,
-            '    PythonOption TracUriRoot /tools/%s' % name,
-            '    PythonOption PYTHON_EGG_CACHE %s' % EGG_CACHE,
+            f'    PythonOption TracEnv {env}',
+            f'    PythonOption TracUriRoot /tools/{name}',
+            f'    PythonOption PYTHON_EGG_CACHE {EGG_CACHE}',
             '    Require all granted',          # anonymous read for the throwaway env
             '</Location>', '']
 
 
 def _check_trac(tgt, name):
-    code, body = _curl(tgt, "/tools/%s/wiki" % name)
+    code, body = _curl(tgt, f"/tools/{name}/wiki")
     ok = code == "200" and ("Trac" in body or "Wiki" in body or "powered by" in body.lower())
-    log("trac:        GET /tools/%s/wiki -> HTTP %s%s" % (name, code, "  (Trac)" if ok else ""))
+    log(f"trac:        GET /tools/{name}/wiki -> HTTP {code}{'  (Trac)' if ok else ''}")
     return ok
 
 
 def _check_svn(tgt, name):
-    code, body = _curl(tgt, "/tools/%s/svn/" % name)
+    code, body = _curl(tgt, f"/tools/{name}/svn/")
     ok = code == "200" and ("subversion" in body.lower() or "Revision 0" in body)
-    log("svn:         GET /tools/%s/svn/ -> HTTP %s%s" % (name, code, "  (mod_dav_svn)" if ok else ""))
+    log(f"svn:         GET /tools/{name}/svn/ -> HTTP {code}{'  (mod_dav_svn)' if ok else ''}")
     return ok
 
 
 def _check_git(tgt, svc, name):
-    p = "/tools/%s/%s/%s/info/refs?service=git-upload-pack" % (name, svc, name)
+    p = f"/tools/{name}/{svc}/{name}/info/refs?service=git-upload-pack"
     code, body = _curl(tgt, p)
     ok = code == "200" and "service=git-upload-pack" in body
-    log("%-12s GET /tools/%s/%s/%s/info/refs -> HTTP %s%s"
-        % (svc + ":", name, svc, name, code, "  (git-http-backend)" if ok else ""))
+    log(f"{svc + ':':<12} GET /tools/{name}/{svc}/{name}/info/refs -> HTTP {code}"
+        f"{'  (git-http-backend)' if ok else ''}")
     return ok
 
 
@@ -848,29 +867,29 @@ def cmd_test():
     configured = detect_configured_services()
     for s in (ARGS.services or []):
         if s not in configured:
-            die("'%s' is not configured here -- run 'install %s' first" % (s, s))
+            die(f"'{s}' is not configured here -- run 'install {s}' first")
     targets = [s for s in (ARGS.services or [t for t in TESTABLE if t in configured])
                if s in TESTABLE]
     if not targets:
-        die("nothing testable here (configured: %s) -- install a service first"
-            % (",".join(configured) or "none"))
+        die(f"nothing testable here (configured: {','.join(configured) or 'none'}) "
+            "-- install a service first")
     tgt = _vhost_target()
     if not tgt:
-        die("could not detect the hub vhost (/etc/httpd/sites.d/%s-ssl.conf)" % ARGS.hub)
+        die(f"could not detect the hub vhost (/etc/httpd/sites.d/{ARGS.hub}-ssl.conf)")
     handler = detect_handler() or ARGS.trac_handler
 
-    name = "hzforge-selftest-%d" % os.getpid()
-    step("Self-test: %s -- throwaway name '%s' via %s://%s"
-         % (",".join(targets), name, tgt["scheme"], tgt["host"]))
+    name = f"hzforge-selftest-{os.getpid()}"
+    step(f"Self-test: {','.join(targets)} -- throwaway name '{name}' "
+         f"via {tgt['scheme']}://{tgt['host']}")
     if "trac" in targets:
-        log("trac handler: %s" % handler)
+        log(f"trac handler: {handler}")
     if CTX.dry:
-        log("[dry-run] would create throwaway %s, curl each, then remove" % ",".join(targets))
+        log(f"[dry-run] would create throwaway {','.join(targets)}, curl each, then remove")
         return
 
     conf = _selftest_conf_path()
     if os.path.exists(conf):
-        die("stale self-test conf present: %s (remove it and retry)" % conf)
+        die(f"stale self-test conf present: {conf} (remove it and retry)")
     created, results = [], {}
     route_lines = ["# hzforge self-test routes -- throwaway, removed automatically",
                    "RewriteEngine On", ""]
@@ -879,19 +898,23 @@ def cmd_test():
         if "trac" in targets:
             env = os.path.join(OPT["trac_tools"][0], name)
             if os.path.exists(env):
-                die("test path already exists: %s" % env)
+                die(f"test path already exists: {env}")
             run(["trac-admin", env, "initenv", name, "sqlite:db/trac.db"], capture=True)
-            run(["chown", "-R", "apache:apache", env]); created.append(env)
+            run(["chown", "-R", "apache:apache", env])
+            created.append(env)
             # mod_wsgi is served by hzforge's generic route; mod_python needs a per-env <Location>
             if handler == "mod_python":
-                route_lines += _trac_modpython_route(name, env); routed = True
+                route_lines += _trac_modpython_route(name, env)
+                routed = True
         if "svn" in targets:
             repo = os.path.join(OPT["svn_tools"][0], name)
             if os.path.exists(repo):
-                die("test path already exists: %s" % repo)
+                die(f"test path already exists: {repo}")
             run(["svnadmin", "create", repo], capture=True)
-            run(["chown", "-R", "apache:apache", repo]); created.append(repo)
-            route_lines += _svn_route(name, repo); routed = True
+            run(["chown", "-R", "apache:apache", repo])
+            created.append(repo)
+            route_lines += _svn_route(name, repo)
+            routed = True
         for gsvc, key in (("git", "git_tools"), ("gitExternal", "gext_tools")):
             if gsvc in targets:
                 root = OPT[key][0]
@@ -900,10 +923,12 @@ def cmd_test():
                 reponame = name + ".git" if gsvc == "git" else name
                 repo = os.path.join(root, reponame)
                 if os.path.exists(repo):
-                    die("test path already exists: %s" % repo)
+                    die(f"test path already exists: {repo}")
                 run(["git", "init", "--bare", "-q", repo], capture=True)
-                run(["chown", "-R", "apache:apache", repo]); created.append(repo)
-                route_lines += _git_route(gsvc, name, root, reponame); routed = True
+                run(["chown", "-R", "apache:apache", repo])
+                created.append(repo)
+                route_lines += _git_route(gsvc, name, root, reponame)
+                routed = True
         if routed:
             write_file(conf, "\n".join(route_lines).rstrip() + "\n", 0o640)
             _reload_for_test("add self-test routes")
@@ -922,8 +947,8 @@ def cmd_test():
 
     failed = [s for s in targets if results.get(s) is False]
     if failed:
-        die("self-test FAILED: %s" % ", ".join(failed))
-    step("Self-test PASSED: %s" % ", ".join(targets))
+        die(f"self-test FAILED: {', '.join(failed)}")
+    step(f"Self-test PASSED: {', '.join(targets)}")
 
 
 # ---------------------------------------------------------------------------- #
@@ -935,7 +960,8 @@ def _remove_file(path):
     if CTX.dry:
         log("[dry-run] rm " + path)
     else:
-        os.remove(path); log("rm " + path)
+        os.remove(path)
+        log("rm " + path)
     _mark()
 
 
@@ -965,7 +991,7 @@ def _disable_legacy_trac():
     """Move a standalone <hub>.conf.d/trac.conf aside (replaced by the trac drop-in)."""
     legacy = os.path.join(ARGS.include_dir, "trac.conf")
     if os.path.exists(legacy):
-        warn("disabling standalone %s (replaced by %s)" % (legacy, dropin_path("trac")))
+        warn(f"disabling standalone {legacy} (replaced by {dropin_path('trac')})")
         _rename(legacy, legacy + ".disabled")
 
 
@@ -996,16 +1022,17 @@ def uninstall(remove):
     skipped = [s for s in remove if s not in configured]
     if not actual:
         if configured:
-            step("Uninstall: %s not configured here (configured: %s) -- nothing to do"
-                 % (",".join(remove), ",".join(configured)))
+            step(f"Uninstall: {','.join(remove)} not configured here "
+                 f"(configured: {','.join(configured)}) -- nothing to do")
         else:
             step("Uninstall: no hzforge services configured here -- nothing to do "
-                 "(requested: %s)" % ",".join(remove))
+                 f"(requested: {','.join(remove)})")
         return                              # leave the running server untouched
     remaining = [x for x in configured if x not in actual]
-    skip = "  [skipping %s: not configured]" % ",".join(skipped) if skipped else ""
-    step("Uninstall %s   (configured=%s -> remaining=%s)%s"
-         % (",".join(actual), ",".join(configured) or "-", ",".join(remaining) or "-", skip))
+    skip = f"  [skipping {','.join(skipped)}: not configured]" if skipped else ""
+    step(f"Uninstall {','.join(actual)}   "
+         f"(configured={','.join(configured) or '-'} -> "
+         f"remaining={','.join(remaining) or '-'}){skip}")
     ARGS.services = remaining
     for svc in actual:
         _remove_file(dropin_path(svc))      # each service is its own file
@@ -1021,14 +1048,16 @@ def uninstall(remove):
     log("Packages, the hzsvn/hzgit groups, and all /opt repo data were left intact.")
 
 
+_CHK_LABELS = {"INFO": "[info]", "OK": "[ ok ]", "WARN": "[warn]", "FAIL": "[FAIL]"}
+
+
 def _chk(results, level, msg):
     results.append((level, msg))
-    print("    %-7s %s" % ({"INFO": "[info]", "OK": "[ ok ]",
-                            "WARN": "[warn]", "FAIL": "[FAIL]"}[level], msg))
+    print(f"    {_CHK_LABELS[level]:<7} {msg}")
 
 
 def doctor():
-    step("Doctor -- hub=%s" % ARGS.hub)
+    step(f"Doctor -- hub={ARGS.hub}")
     r = []
     inc = ARGS.include_dir
     services = detect_configured_services()
@@ -1036,33 +1065,37 @@ def doctor():
     handler = detect_handler()
     legacy = os.path.join(inc, "trac.conf")
     if os.path.exists(legacy):
-        _chk(r, "WARN", "standalone %s present -> consolidate via 'install' (avoid duplicate WSGI)" % legacy)
-    _chk(r, "INFO", "configured services: %s" % (",".join(services) or "(none)"))
+        _chk(r, "WARN", f"standalone {legacy} present -> consolidate via 'install' "
+                        "(avoid duplicate WSGI)")
+    _chk(r, "INFO", f"configured services: {','.join(services) or '(none)'}")
     if ARGS.services:
-        _chk(r, "INFO", "scope: %s" % " ".join(target))
+        _chk(r, "INFO", f"scope: {' '.join(target)}")
         for s in ARGS.services:
             if s not in services:
-                _chk(r, "WARN", "'%s' requested but not currently configured" % s)
+                _chk(r, "WARN", f"'{s}' requested but not currently configured")
     for svc in target:
         p = dropin_path(svc)
         present = os.path.exists(p) or (svc == "trac" and os.path.exists(legacy))
-        _chk(r, "OK" if present else "WARN",
-             "%s drop-in %s" % (svc, "present" if present else "%s ABSENT (run install)" % p))
+        state = "present" if present else f"{p} ABSENT (run install)"
+        _chk(r, "OK" if present else "WARN", f"{svc} drop-in {state}")
     if "trac" in target:
-        _chk(r, "INFO", "trac handler: %s" % (handler or "n/a"))
+        _chk(r, "INFO", f"trac handler: {handler or 'n/a'}")
 
     wsgi_disk, py_disk = _ondisk_module("wsgi_module"), _ondisk_module("python_module")
     wsgi_run, py_run = running_has_so("mod_wsgi"), running_has_so("mod_python")
-    ld = lambda b: "loaded" if b else "not loaded"
+
+    def ld(b):
+        return "loaded" if b else "not loaded"
+
     if wsgi_disk and py_disk:
         _chk(r, "FAIL", "both mod_wsgi and mod_python enabled on disk -> httpd won't start (repair)")
     for name, running, disk in (("mod_wsgi", wsgi_run, wsgi_disk),
                                 ("mod_python", py_run, py_disk)):
         if running == disk:
-            _chk(r, "OK", "%s: %s" % (name, ld(disk)))
+            _chk(r, "OK", f"{name}: {ld(disk)}")
         else:
-            _chk(r, "WARN", "%s: on-disk %s but running %s -- restart pending (repair)"
-                 % (name, ld(disk), ld(running)))
+            _chk(r, "WARN", f"{name}: on-disk {ld(disk)} but running {ld(running)} "
+                            "-- restart pending (repair)")
 
     out = subprocess.run(["apachectl", "configtest"], stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
@@ -1093,8 +1126,8 @@ def doctor():
             _chk(r, "OK", "apache can import Trac")
         else:
             perm = "Permission denied" in (ti.stderr or "")
-            _chk(r, "FAIL", "apache cannot import Trac%s (repair: %s)"
-                 % (" [umask perms]" if perm else "", "fix-perms" if perm else "reinstall Trac"))
+            _chk(r, "FAIL", f"apache cannot import Trac{' [umask perms]' if perm else ''} "
+                            f"(repair: {'fix-perms' if perm else 'reinstall Trac'})")
         # Trac's repo browser is optional -- only relevant when the svn service is
         # configured (it pulls subversion-python). Trac-without-svn is a valid config.
         if "svn" in services:
@@ -1107,26 +1140,27 @@ def doctor():
         _chk(r, "OK" if rpm_installed("mod_dav_svn") else "FAIL",
              "mod_dav_svn " + ("installed" if rpm_installed("mod_dav_svn") else "MISSING"))
         f = os.path.join(inc, "svn", "svn.conf")
-        _chk(r, "OK" if os.path.exists(f) else "WARN",
-             "per-tool %s %s" % (f, "present" if os.path.exists(f) else "absent (generated externally)"))
+        state = "present" if os.path.exists(f) else "absent (generated externally)"
+        _chk(r, "OK" if os.path.exists(f) else "WARN", f"per-tool {f} {state}")
     if "git" in target or "gitExternal" in target:
         _chk(r, "OK" if rpm_installed("git") else "FAIL",
              "git " + ("installed" if rpm_installed("git") else "MISSING"))
         for svc, fn in (("git", "git.conf"), ("gitExternal", "gitExternal.conf")):
             if svc in target:
                 f = os.path.join(inc, "git", fn)
-                _chk(r, "OK" if os.path.exists(f) else "WARN",
-                     "per-tool %s %s" % (f, "present" if os.path.exists(f) else "absent (generated externally)"))
+                state = "present" if os.path.exists(f) else "absent (generated externally)"
+                _chk(r, "OK" if os.path.exists(f) else "WARN", f"per-tool {f} {state}")
     for key, svc in (("trac_tools", "trac"), ("svn_tools", "svn"),
                      ("git_tools", "git"), ("gext_tools", "gitExternal")):
         if svc in target:
             path = OPT[key][0]
-            _chk(r, "OK" if os.path.isdir(path) else "WARN",
-                 "%s %s" % (path, "exists" if os.path.isdir(path) else "MISSING (repair)"))
+            state = "exists" if os.path.isdir(path) else "MISSING (repair)"
+            _chk(r, "OK" if os.path.isdir(path) else "WARN", f"{path} {state}")
 
     fails = sum(1 for lvl, _ in r if lvl == "FAIL")
     warns = sum(1 for lvl, _ in r if lvl == "WARN")
-    step("Doctor: %d FAIL, %d WARN, %d OK" % (fails, warns, sum(1 for l, _ in r if l == "OK")))
+    oks = sum(1 for lvl, _ in r if lvl == "OK")
+    step(f"Doctor: {fails} FAIL, {warns} WARN, {oks} OK")
     if fails or warns:
         log("run 'repair' to fix the repairable items.")
     return fails == 0
@@ -1140,11 +1174,12 @@ def repair():
     target = [s for s in scope if s in configured]   # what we can actually re-assert
     ARGS.trac_handler = handler
     ARGS.services = scope                        # keep doctor() scoped to the request
-    step("Repair -- scope=%s, re-assert=%s (configured: %s)"
-         % (",".join(scope) or "all", ",".join(target) or "none", ",".join(configured) or "none"))
+    step(f"Repair -- scope={','.join(scope) or 'all'}, "
+         f"re-assert={','.join(target) or 'none'} "
+         f"(configured: {','.join(configured) or 'none'})")
     for s in requested:
         if s not in configured:
-            warn("'%s' is not configured -> nothing to repair (use 'install %s')" % (s, s))
+            warn(f"'{s}' is not configured -> nothing to repair (use 'install {s}')")
     doctor()                                     # isolated to scope (+ global checks)
     if not target:
         step("Nothing to re-assert for the requested scope.")
@@ -1223,14 +1258,14 @@ def main():
     if os.geteuid() != 0:
         die("must run as root (sudo).")
     args.hub = args.hub or detect_hub() or "help"
-    args.include_dir = "/etc/httpd/%s.conf.d" % args.hub
+    args.include_dir = f"/etc/httpd/{args.hub}.conf.d"
     # services come in as bare positional args (a list); allow comma-joined too
     services = []
     for tok in (getattr(args, "services", None) or []):   # positional on install/uninstall/doctor/repair/test
         services += [s for s in tok.split(",") if s]
     bad = [s for s in services if s not in ALL_SERVICES]
     if bad:
-        die("unknown service(s): %s (valid: %s)" % (", ".join(bad), ", ".join(ALL_SERVICES)))
+        die(f"unknown service(s): {', '.join(bad)} (valid: {', '.join(ALL_SERVICES)})")
     if args.command == "install" and not services:
         services = list(ALL_SERVICES)                  # install with no args = all
     if args.command == "uninstall" and not services:
@@ -1239,11 +1274,11 @@ def main():
     ARGS = args
 
     print("=" * 72)
-    print(" HUBzero Forge services [%s]  hub=%s%s"
-          % (args.command, args.hub, "  DRY-RUN" if args.dry else ""))
+    dry = "  DRY-RUN" if args.dry else ""
+    print(f" HUBzero Forge services [{args.command}]  hub={args.hub}{dry}")
     print("=" * 72)
     if not os.path.isdir(args.include_dir):
-        die("include dir %s missing (right --hub?)" % args.include_dir)
+        die(f"include dir {args.include_dir} missing (right --hub?)")
 
     if args.command == "install":
         do_install()
