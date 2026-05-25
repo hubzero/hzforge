@@ -582,7 +582,7 @@ def fix_pip_perms():
     the root-umask-0077 problem, chmod a+rX just those packages' files."""
     if ARGS.trac_handler != "mod_wsgi" or "trac" not in ARGS.services:
         return
-    probe = subprocess.run(["sudo", "-u", "apache", "python2", "-c", "import trac"],
+    probe = subprocess.run(["runuser", "-u", "apache", "--", "python2", "-c", "import trac"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            universal_newlines=True)
     if probe.returncode == 0:
@@ -888,7 +888,7 @@ def doctor():
         if handler == "mod_wsgi":
             _chk(r, "OK" if os.path.exists(SHIM_PATH) else "FAIL",
                  "shim %s" % ("present" if os.path.exists(SHIM_PATH) else "MISSING (repair)"))
-        ti = subprocess.run(["sudo", "-u", "apache", "python2", "-c", "import trac"],
+        ti = subprocess.run(["runuser", "-u", "apache", "--", "python2", "-c", "import trac"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, universal_newlines=True)
         if ti.returncode == 0:
             _chk(r, "OK", "apache can import Trac")
@@ -899,7 +899,7 @@ def doctor():
         # Trac's repo browser is optional -- only relevant when the svn service is
         # configured (it pulls subversion-python). Trac-without-svn is a valid config.
         if "svn" in services:
-            sc = subprocess.run(["sudo", "-u", "apache", "python2", "-c", "import svn.core"],
+            sc = subprocess.run(["runuser", "-u", "apache", "--", "python2", "-c", "import svn.core"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _chk(r, "OK" if sc.returncode == 0 else "WARN",
                  "Trac repo browser (svn.core) " + ("available" if sc.returncode == 0
