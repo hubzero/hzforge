@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manual installation | hzforge</title>
+  <meta name="description" content="Prerequisites, command reference, manual install, and the mod_python → mod_wsgi migration.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../../overview/motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../../reference/services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../requirements/index.html">Requirements</a></li>
+    <li><a class="docs-nav__item" href="../usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item is-active" href="index.html">Manual installation</a></li>
+    <li><a class="docs-nav__item" href="../migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Operations</a></p>
+          <h1>Manual installation</h1>
+          <p class="docs-article__source">Source: <code>docs/manual-install.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#common-prerequisites-both-options">Common prerequisites (both options)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#1-enable-the-package-repositories">1. Enable the package repositories</a></li>
+<li class="toc__item toc__item--level-3"><a href="#2-base-packages">2. Base packages</a></li>
+<li class="toc__item toc__item--level-3"><a href="#3-the-httpd-runtime-directory">3. The httpd runtime directory</a></li>
+<li class="toc__item toc__item--level-2"><a href="#option-a-mod-wsgi-trac-svn-git-gitexternal">Option A — mod_wsgi: trac + svn + git + gitExternal</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a1-subversion-source">A1. Subversion source</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a2-trac-packages-and-the-wsgi-stack">A2. Trac packages and the WSGI stack</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a3-directories">A3. Directories</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a4-the-wsgi-shim">A4. The WSGI shim</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a5-load-mod-wsgi-and-ensure-mod-python-is-off">A5. Load mod_wsgi (and ensure mod_python is off)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a6-the-trac-drop-in">A6. The Trac drop-in</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a7-svn-service">A7. svn service</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a8-git-and-gitexternal-services">A8. git and gitExternal services</a></li>
+<li class="toc__item toc__item--level-3"><a href="#a9-validate-and-start">A9. Validate and start</a></li>
+<li class="toc__item toc__item--level-2"><a href="#option-b-mod-python-trac">Option B — mod_python: trac</a></li>
+<li class="toc__item toc__item--level-3"><a href="#b1-subversion-source">B1. Subversion source</a></li>
+<li class="toc__item toc__item--level-3"><a href="#b2-trac-packages-and-mod-python">B2. Trac packages and mod_python</a></li>
+<li class="toc__item toc__item--level-3"><a href="#b3-directories-and-egg-cache">B3. Directories and egg cache</a></li>
+<li class="toc__item toc__item--level-3"><a href="#b4-load-mod-python-and-ensure-mod-wsgi-is-off">B4. Load mod_python (and ensure mod_wsgi is off)</a></li>
+<li class="toc__item toc__item--level-3"><a href="#b5-the-trac-drop-in">B5. The Trac drop-in</a></li>
+<li class="toc__item toc__item--level-3"><a href="#b6-validate-and-start">B6. Validate and start</a></li>
+<li class="toc__item toc__item--level-2"><a href="#doing-it-with-hzforge-instead">Doing it with hzforge instead</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>This page documents, step by step, the <strong>manual</strong> procedure to install each of the
+two configurations exercised by the integration matrix:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Trac handler</th>
+<th>Services</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A</strong></td>
+<td><code>mod_wsgi</code></td>
+<td><code>trac</code> + <code>svn</code> + <code>git</code> + <code>gitExternal</code></td>
+</tr>
+<tr>
+<td><strong>B</strong></td>
+<td><code>mod_python</code></td>
+<td><code>trac</code></td>
+</tr>
+</tbody>
+</table>
+<p>These are exactly the steps <a href="../usage/"><code>hzforge install</code></a> automates — written out so
+you can run them by hand, audit what the tool does, or recover a host without it.
+Everything runs as <strong>root</strong> on Rocky/RHEL 8 with Apache 2.4. Substitute your hub name
+for <code>&lt;hub&gt;</code> (the directory <code>/etc/httpd/&lt;hub&gt;.conf.d/</code> must already be included by the
+vhost via <code>IncludeOptional &lt;hub&gt;.conf.d/*.conf</code>).</p>
+<blockquote>
+<p>The two Trac interpreters <strong>cannot coexist</strong> — load exactly one of <code>mod_wsgi</code> /
+<code>mod_python</code>. Switching handlers means disabling the other module and doing a full
+<code>systemctl restart httpd</code> (a graceful reload cannot swap an embedded interpreter).</p>
+</blockquote>
+<p>See <a href="../requirements/">Requirements</a> for the full host/network prerequisites.</p>
+<hr />
+<h2 id="common-prerequisites-both-options">Common prerequisites (both options)</h2>
+<h3 id="1-enable-the-package-repositories">1. Enable the package repositories</h3>
+<pre><code class="language-sh">dnf -y install dnf-plugins-core epel-release
+dnf config-manager --set-enabled powertools || dnf config-manager --set-enabled crb
+
+cat &gt;/etc/yum.repos.d/hubzero.repo &lt;&lt;'REPO'
+[hubzero]
+name=HUBzero
+baseurl=http://packages.hubzero.org/rpm/julian-el8
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.hubzero.org/rpm/hubzero-rpm-key-pub-2025
+REPO
+rpm --import https://packages.hubzero.org/rpm/hubzero-rpm-key-pub-2025
+</code></pre>
+<h3 id="2-base-packages">2. Base packages</h3>
+<pre><code class="language-sh">dnf -y install httpd httpd-devel mod_ssl \
+  python2 python2-pip python2-devel gcc redhat-rpm-config
+</code></pre>
+<p><code>httpd-devel</code> + <code>gcc</code> are needed to pip-build mod_wsgi (Option A); <code>python2</code>/<code>python2-pip</code>
+build the Py2 Trac stack used by both handlers.</p>
+<h3 id="3-the-httpd-runtime-directory">3. The httpd runtime directory</h3>
+<p><code>httpd</code> needs <code>/run/httpd</code>. With systemd this is created by <code>systemd-tmpfiles</code>; in a
+container/chroot create it yourself before starting httpd:</p>
+<pre><code class="language-sh">install -d -m 0710 -o root -g apache /run/httpd
+</code></pre>
+<hr />
+<h2 id="option-a-mod-wsgi-trac-svn-git-gitexternal">Option A — mod_wsgi: trac + svn + git + gitExternal</h2>
+<h3 id="a1-subversion-source">A1. Subversion source</h3>
+<p><code>hubzero-trac</code> rpm-requires <code>subversion-devel</code>, and the <code>svn</code> service needs
+<code>subversion</code> + <code>mod_dav_svn</code>. Pick <strong>one</strong> source.</p>
+<p><strong>AppStream (simplest):</strong></p>
+<pre><code class="language-sh">dnf -y module enable subversion:1.10
+</code></pre>
+<p><strong>WanDisco 1.10 (matches some production hubs):</strong></p>
+<pre><code class="language-sh">cat &gt;/etc/yum.repos.d/wandisco-svn110.repo &lt;&lt;'REPO'
+[wandisco-svn110]
+name=Wandisco SVN 1.10 RPM repository for Rocky 8
+baseurl=http://opensource.wandisco.com/rhel/8/svn-1.10/RPMS/$basearch/
+enabled=0
+gpgcheck=1
+gpgkey=http://opensource.wandisco.com/RPM-GPG-KEY-WANdisco
+priority=1
+module_hotfixes=1
+REPO
+# if a subversion module stream is enabled, reset it so module_hotfixes wins:
+dnf -y module reset subversion
+</code></pre>
+<p>With WanDisco, append <code>--enablerepo=wandisco-svn110</code> to the <code>subversion</code>/<code>mod_dav_svn</code>
+<code>dnf install</code> below. With AppStream, no <code>--enablerepo</code> is needed.</p>
+<h3 id="a2-trac-packages-and-the-wsgi-stack">A2. Trac packages and the WSGI stack</h3>
+<pre><code class="language-sh"># Trac plugins (pulls subversion-devel from the source enabled above)
+dnf -y install hubzero-trac
+
+# Trac + mod_wsgi from PyPI. umask 022 so root-built files are world-readable
+# (apache must import them); the default umask 0077 would make Trac return 500.
+umask 022
+pip2 install 'Trac&gt;=1.0,&lt;1.1'        # match envs at DB schema 26 (no upgrade)
+pip2 install 'mod_wsgi==4.9.4'       # last Python-2-capable mod_wsgi
+</code></pre>
+<h3 id="a3-directories">A3. Directories</h3>
+<pre><code class="language-sh">install -d -m 0755 -o apache -g apache /opt/trac
+install -d -m 0750 -o apache -g apache /opt/trac/tools
+install -d -m 0755 -o apache -g apache /opt/trac/wsgi
+</code></pre>
+<h3 id="a4-the-wsgi-shim">A4. The WSGI shim</h3>
+<p><code>/opt/trac/wsgi/hubtrac.wsgi</code> re-splits the URL so any <code>/opt/trac/tools/&lt;name&gt;</code> env
+is served generically (the mod_wsgi replacement for <code>PythonOption TracUriRoot</code>):</p>
+<pre><code class="language-python"># /opt/trac/wsgi/hubtrac.wsgi   (mode 0644, apache:apache)
+import os, re
+from trac.web.main import dispatch_request
+
+TOOLS = '/opt/trac/tools'
+PAT = re.compile(r'^(/tools/([^/]+))(/.*)?$')
+
+def application(environ, start_response):
+    full = environ.get('SCRIPT_NAME', '') + environ.get('PATH_INFO', '')
+    m = PAT.match(full)
+    if not m or not os.path.isdir(os.path.join(TOOLS, m.group(2))):
+        start_response('404 Not Found', [('Content-Type', 'text/plain')])
+        return ['No such Trac environment\n']
+    environ['trac.env_path'] = os.path.join(TOOLS, m.group(2))
+    environ['SCRIPT_NAME'] = m.group(1)
+    environ['PATH_INFO'] = m.group(3) or '/'
+    return dispatch_request(environ, start_response)
+</code></pre>
+<h3 id="a5-load-mod-wsgi-and-ensure-mod-python-is-off">A5. Load mod_wsgi (and ensure mod_python is off)</h3>
+<p>The <code>LoadModule</code>/<code>WSGIPythonHome</code> lines come from the pip build:</p>
+<pre><code class="language-sh">mod_wsgi-express module-config
+</code></pre>
+<p>Write its output into <code>/etc/httpd/conf.modules.d/10-wsgi.conf</code> (mode 0644):</p>
+<pre><code class="language-apache"># Python2 mod_wsgi
+LoadModule wsgi_module &quot;/usr/lib64/python2.7/site-packages/mod_wsgi/server/mod_wsgi-py27.so&quot;
+WSGIPythonHome &quot;/usr&quot;
+WSGISocketPrefix run/wsgi
+WSGIRestrictEmbedded On
+</code></pre>
+<pre><code class="language-sh"># the two interpreters can't coexist -- make sure mod_python is not loaded
+[ -f /etc/httpd/conf.modules.d/10-python.conf ] &amp;&amp; \
+  mv /etc/httpd/conf.modules.d/10-python.conf{,.disabled}
+</code></pre>
+<h3 id="a6-the-trac-drop-in">A6. The Trac drop-in</h3>
+<p><code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-trac.conf</code> (mode 0640). The <code>WSGIScriptAliasMatch</code>
+self-diverts at translate-name, so <strong>no rewrite carve-out is needed</strong>:</p>
+<pre><code class="language-apache"># HUBzero 'trac' service
+RewriteEngine On
+
+WSGIDaemonProcess trac user=apache group=apache processes=2 threads=15 python-home=/usr display-name=%{GROUP}
+WSGIApplicationGroup %{GLOBAL}
+WSGIScriptAliasMatch &quot;^/tools/[^/]+(?=/(?:wiki|wiki_render|timeline|roadmap|browser|changeset|ticket|newticket|report|query|search|admin|prefs|login|logout|about|diff|attachment|raw-attachment|export|chrome|log|pygments)(?:/|$))&quot; /opt/trac/wsgi/hubtrac.wsgi process-group=trac
+&lt;Directory /opt/trac/wsgi&gt;
+    &lt;Files hubtrac.wsgi&gt;
+        Require all granted
+    &lt;/Files&gt;
+&lt;/Directory&gt;
+</code></pre>
+<p><em>(Optional)</em> to have Apache authenticate <code>/login</code> so Trac sees <code>REMOTE_USER</code>, append:</p>
+<pre><code class="language-apache">&lt;LocationMatch &quot;^/tools/[^/]+/login&quot;&gt;
+    AuthType Basic
+    AuthBasicProvider ldap
+    AuthName &quot;HUBzero Trac&quot;
+    AuthLDAPURL ldap://127.0.0.1/ou=users,dc=hubzero,dc=org
+    AuthLDAPBindDN &quot;cn=search,dc=hubzero,dc=org&quot;
+    AuthLDAPBindPassword &quot;...&quot;
+    Require valid-user
+&lt;/LocationMatch&gt;
+</code></pre>
+<h3 id="a7-svn-service">A7. svn service</h3>
+<pre><code class="language-sh"># packages: subversion + mod_dav_svn (from the A1 source) + the Py2 SWIG bindings.
+# add --enablerepo=wandisco-svn110 here if you chose WanDisco in A1.
+dnf -y install subversion mod_dav_svn
+dnf -y install subversion-python          # from hubzero; also lights up Trac's repo browser
+
+groupadd -f hzsvn
+install -d -m 0755 -o apache -g apache /opt/svn
+install -d -m 0750 -o apache -g apache /opt/svn/tools
+install -d -m 0700 -o apache -g apache /etc/httpd/&lt;hub&gt;.conf.d/svn
+</code></pre>
+<p><code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-svn.conf</code> (mode 0640). <code>mod_dav_svn</code> is a <code>&lt;Location&gt;</code>
+handler, so it <strong>must</strong> be shielded from the CMS catch-all rewrite:</p>
+<pre><code class="language-apache"># HUBzero 'svn' service
+RewriteEngine On
+
+# DAV-svn is a &lt;Location&gt; handler -&gt; shield from the CMS catch-all rewrite
+RewriteRule &quot;^/tools/[^/]+/svn(/|$)&quot; - [END]
+
+IncludeOptional /etc/httpd/&lt;hub&gt;.conf.d/svn/svn.conf
+</code></pre>
+<p>The per-tool <code>&lt;Location /tools/&lt;name&gt;/svn&gt;</code> blocks live in <code>svn/svn.conf</code>, which is
+generated from MySQL by the hub's forge tooling — hzforge only <em>includes</em> it.</p>
+<h3 id="a8-git-and-gitexternal-services">A8. git and gitExternal services</h3>
+<pre><code class="language-sh">dnf -y install git
+groupadd -f hzgit
+install -d -m 0755 -o apache -g apache /opt/git          /opt/git/tools
+install -d -m 0755 -o apache -g apache /opt/gitExternal  /opt/gitExternal/tools
+install -d -m 0700 -o apache -g apache /etc/httpd/&lt;hub&gt;.conf.d/git
+</code></pre>
+<p><code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-git.conf</code> (mode 0640):</p>
+<pre><code class="language-apache"># HUBzero 'git' service
+RewriteEngine On
+# git http-backend (ScriptAliasMatch self-diverts; shield non-protocol paths)
+RewriteRule &quot;^/tools/[^/]+/git(/|$)&quot; - [END]
+IncludeOptional /etc/httpd/&lt;hub&gt;.conf.d/git/git.conf
+</code></pre>
+<p><code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-gitExternal.conf</code> (mode 0640):</p>
+<pre><code class="language-apache"># HUBzero 'gitExternal' service
+RewriteEngine On
+RewriteRule &quot;^/tools/[^/]+/gitExternal(/|$)&quot; - [END]
+IncludeOptional /etc/httpd/&lt;hub&gt;.conf.d/git/gitExternal.conf
+</code></pre>
+<p>As with svn, the <code>ScriptAliasMatch</code> git-http-backend routes live in <code>git/git.conf</code> /
+<code>git/gitExternal.conf</code> (MySQL-generated); the drop-ins only include them.</p>
+<h3 id="a9-validate-and-start">A9. Validate and start</h3>
+<pre><code class="language-sh">apachectl configtest
+systemctl restart httpd          # full restart: the interpreter module set changed
+#   container/chroot without systemd:  httpd -k start   (or  httpd -k restart)
+</code></pre>
+<p>Verify a throwaway env serves (the generic shim handles any env):</p>
+<pre><code class="language-sh">trac-admin /opt/trac/tools/probe initenv probe sqlite:db/trac.db
+chown -R apache:apache /opt/trac/tools/probe
+curl -sk https://&lt;hub&gt;/tools/probe/wiki | head    # expect a Trac wiki page
+rm -rf /opt/trac/tools/probe
+</code></pre>
+<hr />
+<h2 id="option-b-mod-python-trac">Option B — mod_python: trac</h2>
+<p>The legacy in-process handler. Unlike mod_wsgi there is <strong>no generic route</strong>: each Trac
+environment needs its own <code>&lt;Location&gt;</code> block, so the drop-in is regenerated whenever you
+add or remove envs.</p>
+<h3 id="b1-subversion-source">B1. Subversion source</h3>
+<p>Same as <a href="#a1-subversion-source">A1</a> — <code>hubzero-trac</code> still needs <code>subversion-devel</code>, so
+enable a source even though you are not installing the <code>svn</code> service:</p>
+<pre><code class="language-sh">dnf -y module enable subversion:1.10      # (or set up the WanDisco repo as in A1)
+</code></pre>
+<h3 id="b2-trac-packages-and-mod-python">B2. Trac packages and mod_python</h3>
+<pre><code class="language-sh">dnf -y install hubzero-trac
+
+umask 022
+pip2 install 'Trac&gt;=1.0,&lt;1.1'             # mod_python loads Trac from site-packages
+
+# mod_python comes from the hubzero (julian-el8) repo, built for the Python 2.7 it embeds
+dnf -y install mod_python
+</code></pre>
+<h3 id="b3-directories-and-egg-cache">B3. Directories and egg cache</h3>
+<pre><code class="language-sh">install -d -m 0755 -o apache -g apache /opt/trac
+install -d -m 0750 -o apache -g apache /opt/trac/tools
+install -d -m 0755 -o apache -g apache /opt/trac/.egg-cache
+</code></pre>
+<h3 id="b4-load-mod-python-and-ensure-mod-wsgi-is-off">B4. Load mod_python (and ensure mod_wsgi is off)</h3>
+<pre><code class="language-sh">cat &gt;/etc/httpd/conf.modules.d/10-python.conf &lt;&lt;'EOF'
+LoadModule python_module modules/mod_python.so
+EOF
+
+[ -f /etc/httpd/conf.modules.d/10-wsgi.conf ] &amp;&amp; \
+  mv /etc/httpd/conf.modules.d/10-wsgi.conf{,.disabled}
+</code></pre>
+<h3 id="b5-the-trac-drop-in">B5. The Trac drop-in</h3>
+<p><code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-trac.conf</code> (mode 0640). The verb paths are a
+<code>&lt;Location&gt;</code> handler, so they are shielded from the CMS catch-all; then <strong>one
+<code>&lt;Location&gt;</code> per env</strong>:</p>
+<pre><code class="language-apache"># HUBzero 'trac' service (mod_python)
+RewriteEngine On
+# Trac via mod_python -- &lt;Location&gt; per env; shield verbs from the CMS rewrite
+RewriteRule &quot;^/tools/[^/]+/(wiki|wiki_render|timeline|roadmap|browser|changeset|ticket|newticket|report|query|search|admin|prefs|login|logout|about|diff|attachment|raw-attachment|export|chrome|log|pygments)(/|$)&quot; - [END]
+PythonOption PYTHON_EGG_CACHE /opt/trac/.egg-cache
+
+# repeat this block for every env under /opt/trac/tools/&lt;env&gt;/conf/trac.ini
+&lt;Location /tools/myproject&gt;
+    SetHandler mod_python
+    PythonHandler trac.web.modpython_frontend
+    PythonInterpreter main_interpreter
+    PythonOption TracEnv /opt/trac/tools/myproject
+    PythonOption TracUriRoot /tools/myproject
+&lt;/Location&gt;
+</code></pre>
+<blockquote>
+<p>Because the route is per-env, you must <strong>rebuild this drop-in and reload httpd each
+time an env is created or removed</strong> (<code>hzforge repair trac</code> does exactly this by
+enumerating <code>/opt/trac/tools/*/conf/trac.ini</code>).</p>
+</blockquote>
+<h3 id="b6-validate-and-start">B6. Validate and start</h3>
+<pre><code class="language-sh">apachectl configtest
+systemctl restart httpd          # full restart: the interpreter module set changed
+curl -sk https://&lt;hub&gt;/tools/myproject/wiki | head    # expect a Trac wiki page
+</code></pre>
+<hr />
+<h2 id="doing-it-with-hzforge-instead">Doing it with hzforge instead</h2>
+<p>Each option above is a single command:</p>
+<pre><code class="language-sh"># Option A
+sudo python3 hzforge.py install trac svn git gitExternal --svn-source appstream
+
+# Option B
+sudo python3 hzforge.py install trac --trac-handler mod_python --svn-source appstream
+</code></pre>
+<p>hzforge additionally decides restart-vs-reload from the running interpreter set, fixes
+pip file permissions, creates <code>/run/httpd</code> on non-systemd hosts, and runs the
+<a href="../usage/#test-services">self-test</a>. See <a href="../usage/">Usage</a> for the full command set and
+<a href="../../reference/architecture/">Architecture</a> for why the drop-ins are wired this way.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>

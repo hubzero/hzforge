@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Usage | hzforge</title>
-  <meta name="description" content="Prerequisites, command reference, and the mod_python → mod_wsgi migration.">
+  <meta name="description" content="Prerequisites, command reference, manual install, and the mod_python → mod_wsgi migration.">
   <link rel="stylesheet" href="../../assets/site.css">
 </head>
 <body class="site-doc">
@@ -50,6 +50,7 @@
   <ul class="docs-nav__list">
     <li><a class="docs-nav__item" href="../requirements/index.html">Requirements</a></li>
     <li><a class="docs-nav__item is-active" href="index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="../manual-install/index.html">Manual installation</a></li>
     <li><a class="docs-nav__item" href="../migration/index.html">Migration: mod_python → mod_wsgi</a></li>
   </ul>
 </div>
@@ -70,7 +71,7 @@
 <li class="toc__item toc__item--level-3"><a href="#uninstall-services">uninstall `&lt;services&gt;`</a></li>
 <li class="toc__item toc__item--level-3"><a href="#doctor-services">doctor `[services]`</a></li>
 <li class="toc__item toc__item--level-3"><a href="#repair-services">repair `[services]`</a></li>
-<li class="toc__item toc__item--level-3"><a href="#test">test</a></li>
+<li class="toc__item toc__item--level-3"><a href="#test-services">test `[services]`</a></li>
 <li class="toc__item toc__item--level-2"><a href="#options-install">Options (install)</a></li>
 <li class="toc__item toc__item--level-2"><a href="#exit-codes">Exit codes</a></li>
 <li class="toc__item toc__item--level-2"><a href="#safety">Safety</a></li>
@@ -80,7 +81,8 @@
 <p>Run as <strong>root</strong> (<code>sudo</code>). Services are <strong>positional</strong> (space- or comma-separated).
 A bare <code>hzforge</code> prints help.</p>
 <p>See <a href="../requirements/">Requirements</a> for host, Python, package, and network
-prerequisites before installing.</p>
+prerequisites before installing, and <a href="../manual-install/">Manual installation</a> for the
+step-by-step by-hand procedure (what these commands automate) for each handler/service set.</p>
 <pre><code>sudo python3 hzforge.py install                          # all services
 sudo python3 hzforge.py install trac                     # one service
 sudo python3 hzforge.py install svn git gitExternal trac
@@ -90,7 +92,8 @@ sudo python3 hzforge.py doctor                           # diagnose all configur
 sudo python3 hzforge.py doctor git                       # diagnose one service
 sudo python3 hzforge.py repair                           # fix drift
 sudo python3 hzforge.py repair trac
-sudo python3 hzforge.py test                             # create a throwaway Trac project, verify, remove
+sudo python3 hzforge.py test                             # throwaway project per configured service, verify, remove
+sudo python3 hzforge.py test svn git                     # only the named services
 </code></pre>
 <p>Preview any command without changing anything:</p>
 <pre><code>sudo python3 hzforge.py install --dry-run
@@ -99,29 +102,67 @@ sudo python3 hzforge.py test                             # create a throwaway Tr
 <h3 id="install-services">install <code>[services]</code></h3>
 <p>Install packages, create <code>/opt/&lt;svc&gt;/tools</code> dirs (conventional perms), create the
 <code>hzsvn</code>/<code>hzgit</code> groups, and write the per-service drop-in(s). No services = all
-four. Consolidates a legacy standalone <code>trac.conf</code> into the trac drop-in. After
+four. Consolidates a legacy standalone <code>trac.conf</code> into the trac drop-in. On a host
+without systemd (a container or chroot) it also creates the <code>/run/httpd</code> runtime dir
+that <code>httpd -k start</code> needs, since <code>systemd-tmpfiles</code> isn't there to make it. After
 installing trac it runs the <strong>test</strong> self-check automatically (skip with
 <code>--no-test</code>).</p>
 <h3 id="uninstall-services">uninstall <code>&lt;services&gt;</code></h3>
 <p>Remove a service's drop-in (and, for trac, unload its interpreter module) plus the
 helper files hzforge created for it — for trac the WSGI shim and egg cache, for svn
 the wandisco repo file. <strong>Never</strong> removes packages, the <code>hzsvn</code>/<code>hzgit</code> groups, or
-repository data under <code>/opt/&lt;svc&gt;/tools</code> (only the config/serving is torn down).</p>
+repository data under <code>/opt/&lt;svc&gt;/tools</code> (only the config/serving is torn down). A
+requested service that isn't currently configured is reported and skipped; if none
+of the requested services are configured, the running server is left untouched.</p>
 <h3 id="doctor-services">doctor <code>[services]</code></h3>
 <p>Read-only diagnosis; exits non-zero if anything is <strong>FAIL</strong>. Service-specific checks
-are scoped to the requested services; global checks (<code>apachectl configtest</code>,
-running-vs-on-disk interpreter state, a stray legacy <code>trac.conf</code>) always run.</p>
+are scoped to the requested services; global checks always run: <code>apachectl configtest</code>, running-vs-on-disk interpreter state, a stray legacy <code>trac.conf</code>, the
+service-control mechanism (systemd vs <code>httpd -k</code>), presence of the <code>/run/httpd</code>
+runtime dir on non-systemd hosts, and whether httpd is actually <strong>active</strong>.</p>
 <h3 id="repair-services">repair <code>[services]</code></h3>
 <p>Diagnose, then re-assert the requested (configured) services — fixing missing
 shim/dirs, file permissions, and module state — then validate and reload/restart.
 <code>repair git</code> is isolated to git; it won't touch trac.</p>
-<h3 id="test">test</h3>
-<p>End-to-end self-check for the Trac (mod_wsgi) handler: creates a throwaway,
-uniquely-named Trac environment under <code>/opt/trac/tools/</code>, fetches
-<code>/tools/&lt;name&gt;/wiki</code> over the hub's own vhost, asserts a <code>200</code> Trac response, then
-removes the environment. It needs no MySQL/forge provisioning — the WSGI shim
-serves any env generically — and exits non-zero on failure (handy for CI). Runs
-automatically at the end of <code>install trac</code>.</p>
+<h3 id="test-services">test <code>[services]</code></h3>
+<p>End-to-end self-check per service. For each requested (configured) service it creates
+a throwaway, uniquely-named project, fetches it over the hub's own vhost, asserts a
+<code>200</code>, then removes it. No services = all configured.</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Resource created</th>
+<th>URL checked</th>
+<th>Pass signal</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trac</code></td>
+<td>Trac env under <code>/opt/trac/tools/</code></td>
+<td><code>/tools/&lt;name&gt;/wiki</code></td>
+<td>Trac wiki page</td>
+</tr>
+<tr>
+<td><code>svn</code></td>
+<td>repo via <code>svnadmin create</code> under <code>/opt/svn/tools/</code></td>
+<td><code>/tools/&lt;name&gt;/svn/</code></td>
+<td>mod_dav_svn listing</td>
+</tr>
+<tr>
+<td><code>git</code> / <code>gitExternal</code></td>
+<td>bare repo under <code>/opt/&lt;svc&gt;/tools/&lt;name&gt;.git</code></td>
+<td><code>…/git/&lt;name&gt;/info/refs?service=git-upload-pack</code></td>
+<td>git-http-backend advertisement</td>
+</tr>
+</tbody>
+</table>
+<p>It needs no MySQL/forge provisioning. mod_wsgi <code>trac</code> is served by hzforge's generic WSGI
+route (no config change); <code>svn</code>, <code>git</code>, and <strong>mod_python</strong> <code>trac</code> need a per-resource
+route, so a temporary self-test drop-in (<code>00-forge-selftest.conf</code>) is added and removed
+around the checks (graceful reload). Both Trac handlers are self-testable. Exits non-zero
+on failure (handy for CI). The just-installed services are tested automatically at the end
+of <code>install</code> (skip with <code>--no-test</code>).</p>
 <h2 id="options-install">Options (install)</h2>
 <table>
 <thead>

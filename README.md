@@ -49,6 +49,7 @@ Full docs: **<https://hubzero.github.io/hzforge/>** (sources under [`docs/`](doc
 - [Architecture](https://hubzero.github.io/hzforge/reference/architecture/) &mdash; how the drop-ins are wired
 - [Services](https://hubzero.github.io/hzforge/reference/services/) &mdash; the four services in detail
 - [Usage](https://hubzero.github.io/hzforge/operations/usage/) &mdash; full command reference
+- [Manual installation](https://hubzero.github.io/hzforge/operations/manual-install/) &mdash; by-hand steps for each handler/service set
 - [Migration](https://hubzero.github.io/hzforge/operations/migration/) &mdash; mod_python → mod_wsgi
 
 ## Quickstart

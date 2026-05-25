@@ -4,7 +4,8 @@ Run as **root** (`sudo`). Services are **positional** (space- or comma-separated
 A bare `hzforge` prints help.
 
 See [Requirements](requirements.md) for host, Python, package, and network
-prerequisites before installing.
+prerequisites before installing, and [Manual installation](manual-install.md) for the
+step-by-step by-hand procedure (what these commands automate) for each handler/service set.
 
 ```
 sudo python3 hzforge.py install                          # all services
