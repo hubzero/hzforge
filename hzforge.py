@@ -791,7 +791,7 @@ def doctor():
     for name, run, disk in (("mod_wsgi", wsgi_run, wsgi_disk),
                             ("mod_python", py_run, py_disk)):
         if run == disk:
-            _chk(r, "OK", "%s: %s (running matches disk)" % (name, ld(disk)))
+            _chk(r, "OK", "%s: %s" % (name, ld(disk)))
         else:
             _chk(r, "WARN", "%s: on-disk %s but running %s -- restart pending (repair)"
                  % (name, ld(disk), ld(run)))
