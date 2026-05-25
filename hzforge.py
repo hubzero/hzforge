@@ -793,7 +793,7 @@ def doctor():
              "on-disk (mod_wsgi %s, mod_python %s); restart pending (repair)"
              % (ld(wsgi_run), ld(py_run), ld(wsgi_disk), ld(py_disk)))
     else:
-        _chk(r, "OK", "interpreters: mod_wsgi %s, mod_python %s (running matches disk)"
+        _chk(r, "OK", "interpreter state consistent -- mod_wsgi %s, mod_python %s (running matches disk)"
              % (ld(wsgi_disk), ld(py_disk)))
 
     out = subprocess.run(["apachectl", "configtest"], stdout=subprocess.PIPE,
