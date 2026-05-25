@@ -358,7 +358,14 @@ def _trac_modwsgi():
 
 
 def _trac_modpython():
-    # mod_python serves Trac in-process; ensure the module is loaded and mod_wsgi isn't
+    # mod_python serves Trac in-process; ensure Trac is importable, the module is loaded,
+    # and mod_wsgi isn't.  mod_python comes from the hubzero (julian-el8) repo, built for
+    # the Python 2.7 it embeds.
+    os.umask(0o022)  # so root-built pip files are readable by apache
+    if py2_can_import("trac") and not ARGS.force_pip:
+        log("Trac importable (skip pip; --force-pip to reinstall)")
+    else:
+        run(["sh", "-c", "umask 022; pip2 install '%s'" % ARGS.trac_spec])
     if not rpm_installed("mod_python"):
         dnf_install(["mod_python"])
     makedir(EGG_CACHE, 0o755)
@@ -773,6 +780,20 @@ def _git_route(svc, name, root, repo):
             '</LocationMatch>', '']
 
 
+def _trac_modpython_route(name, env):
+    # per-env <Location> for the legacy mod_python handler (mirrors the install block);
+    # mod_wsgi needs none of this -- its generic WSGIScriptAliasMatch serves any env.
+    return ['<Location /tools/%s>' % name,
+            '    SetHandler mod_python',
+            '    PythonHandler trac.web.modpython_frontend',
+            '    PythonInterpreter main_interpreter',
+            '    PythonOption TracEnv %s' % env,
+            '    PythonOption TracUriRoot /tools/%s' % name,
+            '    PythonOption PYTHON_EGG_CACHE %s' % EGG_CACHE,
+            '    Require all granted',          # anonymous read for the throwaway env
+            '</Location>', '']
+
+
 def _check_trac(tgt, name):
     code, body = _curl(tgt, "/tools/%s/wiki" % name)
     ok = code == "200" and ("Trac" in body or "Wiki" in body or "powered by" in body.lower())
@@ -799,9 +820,9 @@ def _check_git(tgt, svc, name):
 def cmd_test():
     """Create throwaway, uniquely-named backing resources for each requested service,
     verify each actually serves over HTTP, then remove them.  Self-contained: needs no
-    MySQL/forge provisioning.  trac is served by hzforge's generic WSGI route, so it needs
-    no config change; svn/git need a per-repo route, so a temporary self-test drop-in is
-    added and removed around the checks (graceful reload)."""
+    MySQL/forge provisioning.  mod_wsgi trac is served by hzforge's generic WSGI route, so
+    it needs no config change; svn, git, and mod_python trac need a per-resource route, so
+    a temporary self-test drop-in is added and removed around the checks (graceful reload)."""
     configured = detect_configured_services()
     for s in (ARGS.services or []):
         if s not in configured:
@@ -814,15 +835,13 @@ def cmd_test():
     tgt = _vhost_target()
     if not tgt:
         die("could not detect the hub vhost (/etc/httpd/sites.d/%s-ssl.conf)" % ARGS.hub)
-    if "trac" in targets and (detect_handler() or ARGS.trac_handler) != "mod_wsgi":
-        warn("trac self-test supports the mod_wsgi handler only -- skipping trac")
-        targets = [s for s in targets if s != "trac"]
-    if not targets:
-        die("nothing to test after skips")
+    handler = detect_handler() or ARGS.trac_handler
 
     name = "hzforge-selftest-%d" % os.getpid()
     step("Self-test: %s -- throwaway name '%s' via %s://%s"
          % (",".join(targets), name, tgt["scheme"], tgt["host"]))
+    if "trac" in targets:
+        log("trac handler: %s" % handler)
     if CTX.dry:
         log("[dry-run] would create throwaway %s, curl each, then remove" % ",".join(targets))
         return
@@ -833,7 +852,7 @@ def cmd_test():
     created, results = [], {}
     route_lines = ["# hzforge self-test routes -- throwaway, removed automatically",
                    "RewriteEngine On", ""]
-    route_svcs = [s for s in targets if s != "trac"]
+    routed = False                              # do svn/git/mod_python-trac need a temp route?
     try:
         if "trac" in targets:
             env = os.path.join(OPT["trac_tools"][0], name)
@@ -841,13 +860,16 @@ def cmd_test():
                 die("test path already exists: %s" % env)
             run(["trac-admin", env, "initenv", name, "sqlite:db/trac.db"], capture=True)
             run(["chown", "-R", "apache:apache", env]); created.append(env)
+            # mod_wsgi is served by hzforge's generic route; mod_python needs a per-env <Location>
+            if handler == "mod_python":
+                route_lines += _trac_modpython_route(name, env); routed = True
         if "svn" in targets:
             repo = os.path.join(OPT["svn_tools"][0], name)
             if os.path.exists(repo):
                 die("test path already exists: %s" % repo)
             run(["svnadmin", "create", repo], capture=True)
             run(["chown", "-R", "apache:apache", repo]); created.append(repo)
-            route_lines += _svn_route(name, repo)
+            route_lines += _svn_route(name, repo); routed = True
         for gsvc, key in (("git", "git_tools"), ("gitExternal", "gext_tools")):
             if gsvc in targets:
                 root = OPT[key][0]
@@ -856,8 +878,8 @@ def cmd_test():
                     die("test path already exists: %s" % repo)
                 run(["git", "init", "--bare", "-q", repo], capture=True)
                 run(["chown", "-R", "apache:apache", repo]); created.append(repo)
-                route_lines += _git_route(gsvc, name, root, repo)
-        if route_svcs:
+                route_lines += _git_route(gsvc, name, root, repo); routed = True
+        if routed:
             write_file(conf, "\n".join(route_lines).rstrip() + "\n", 0o640)
             _reload_for_test("add self-test routes")
         if "trac" in targets:        results["trac"] = _check_trac(tgt, name)
@@ -929,11 +951,9 @@ def do_install():
     fix_pip_perms()
     write_dropin(s)
     apply_changes()
-    # verify the just-installed services actually serve, unless suppressed.
-    # mod_python Trac has no self-test, so drop it from the testable set.
+    # verify the just-installed services actually serve, unless suppressed
+    # (both Trac handlers are self-testable).
     testable = [x for x in s if x in TESTABLE]
-    if "trac" in testable and ARGS.trac_handler != "mod_wsgi":
-        testable = [x for x in testable if x != "trac"]
     if testable and not ARGS.no_test and not ARGS.no_restart and not CTX.dry:
         cmd_test()
 

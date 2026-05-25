@@ -68,12 +68,12 @@ a throwaway, uniquely-named project, fetches it over the hub's own vhost, assert
 | `svn` | repo via `svnadmin create` under `/opt/svn/tools/` | `/tools/<name>/svn/` | mod_dav_svn listing |
 | `git` / `gitExternal` | bare repo under `/opt/<svc>/tools/<name>.git` | `…/git/<name>/info/refs?service=git-upload-pack` | git-http-backend advertisement |
 
-It needs no MySQL/forge provisioning. `trac` is served by hzforge's generic WSGI route
-(no config change); `svn`/`git` need a per-repo route, so a temporary self-test drop-in
-(`00-forge-selftest.conf`) is added and removed around the checks (graceful reload). The
-mod_python Trac handler has no self-test. Exits non-zero on failure (handy for CI). The
-just-installed services are tested automatically at the end of `install` (skip with
-`--no-test`).
+It needs no MySQL/forge provisioning. mod_wsgi `trac` is served by hzforge's generic WSGI
+route (no config change); `svn`, `git`, and **mod_python** `trac` need a per-resource
+route, so a temporary self-test drop-in (`00-forge-selftest.conf`) is added and removed
+around the checks (graceful reload). Both Trac handlers are self-testable. Exits non-zero
+on failure (handy for CI). The just-installed services are tested automatically at the end
+of `install` (skip with `--no-test`).
 
 ## Options (install)
 
