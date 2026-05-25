@@ -30,7 +30,8 @@ Run as root.  Services are positional; preview any command with --dry-run:
   hzforge uninstall git                      # stop serving git (packages/data kept)
   hzforge doctor                             # diagnose all (or: hzforge doctor git)
   hzforge repair                             # fix drift (or: hzforge repair trac)
-  hzforge test                               # create a throwaway Trac project, verify, remove
+  hzforge test                               # throwaway project per configured service, verify, remove
+  hzforge test svn git                       # only the named services
 Bare `hzforge` (no command) prints help.
 """
 
@@ -702,7 +703,7 @@ def detect_hub():
 
 
 # ---------------------------------------------------------------------------- #
-# test -- create a throwaway Trac project and verify it actually serves
+# test -- create throwaway backing resources per service and verify they serve
 # ---------------------------------------------------------------------------- #
 def _vhost_target():
     """Detect how to reach the hub's vhost: {ip, port, host, scheme} or None."""
@@ -737,40 +738,145 @@ def _curl(tgt, path):
         os.unlink(tmp)
 
 
+TESTABLE = ["trac", "svn", "git", "gitExternal"]
+
+
+def _selftest_conf_path():
+    return os.path.join(ARGS.include_dir, DROPIN_PREFIX + "selftest.conf")
+
+
+def _reload_for_test(why):
+    """configtest then graceful reload -- a self-test never changes the module set."""
+    out = run(["apachectl", "configtest"], capture=True, check=False, mutating=False)
+    if "Syntax OK" not in out:
+        print("    " + out.strip().replace("\n", "\n    "))
+        die("self-test route failed configtest (%s) -- running server untouched" % why)
+    apache_apply(restart=False)
+
+
+def _svn_route(name, repo):
+    return ['<Location /tools/%s/svn>' % name,
+            '    DAV svn',
+            '    SVNPath %s' % repo,
+            '    Require all granted',          # throwaway repo, removed right after
+            '</Location>', '']
+
+
+def _git_route(svc, name, root, repo):
+    # http-backend route for the throwaway repo, mirroring the MySQL-generated conf
+    return ['SetEnvIf Request_URI "^/tools/%s/%s/%s/" GIT_PROJECT_ROOT=%s' % (name, svc, name, root),
+            'SetEnv GIT_HTTP_EXPORT_ALL',
+            'ScriptAliasMatch "^/tools/%s/%s/%s/(.*)$" '
+            '/usr/libexec/git-core/git-http-backend/%s.git/$1' % (name, svc, name, name),
+            '<LocationMatch "^/tools/%s/%s">' % (name, svc),
+            '    Require all granted',          # anonymous read for the throwaway repo
+            '</LocationMatch>', '']
+
+
+def _check_trac(tgt, name):
+    code, body = _curl(tgt, "/tools/%s/wiki" % name)
+    ok = code == "200" and ("Trac" in body or "Wiki" in body or "powered by" in body.lower())
+    log("trac:        GET /tools/%s/wiki -> HTTP %s%s" % (name, code, "  (Trac)" if ok else ""))
+    return ok
+
+
+def _check_svn(tgt, name):
+    code, body = _curl(tgt, "/tools/%s/svn/" % name)
+    ok = code == "200" and ("subversion" in body.lower() or "Revision 0" in body)
+    log("svn:         GET /tools/%s/svn/ -> HTTP %s%s" % (name, code, "  (mod_dav_svn)" if ok else ""))
+    return ok
+
+
+def _check_git(tgt, svc, name):
+    p = "/tools/%s/%s/%s/info/refs?service=git-upload-pack" % (name, svc, name)
+    code, body = _curl(tgt, p)
+    ok = code == "200" and "service=git-upload-pack" in body
+    log("%-12s GET /tools/%s/%s/%s/info/refs -> HTTP %s%s"
+        % (svc + ":", name, svc, name, code, "  (git-http-backend)" if ok else ""))
+    return ok
+
+
 def cmd_test():
-    """Create a throwaway, uniquely-named Trac env, verify it serves over HTTP, remove it.
-    Self-contained: needs no MySQL/forge provisioning (the WSGI shim serves any env)."""
-    if "trac" not in detect_configured_services():
-        die("trac is not configured here -- nothing to self-test (run 'install trac' first)")
-    if (detect_handler() or ARGS.trac_handler) != "mod_wsgi":
-        die("self-test currently supports the mod_wsgi handler only")
+    """Create throwaway, uniquely-named backing resources for each requested service,
+    verify each actually serves over HTTP, then remove them.  Self-contained: needs no
+    MySQL/forge provisioning.  trac is served by hzforge's generic WSGI route, so it needs
+    no config change; svn/git need a per-repo route, so a temporary self-test drop-in is
+    added and removed around the checks (graceful reload)."""
+    configured = detect_configured_services()
+    for s in (ARGS.services or []):
+        if s not in configured:
+            die("'%s' is not configured here -- run 'install %s' first" % (s, s))
+    targets = [s for s in (ARGS.services or [t for t in TESTABLE if t in configured])
+               if s in TESTABLE]
+    if not targets:
+        die("nothing testable here (configured: %s) -- install a service first"
+            % (",".join(configured) or "none"))
     tgt = _vhost_target()
     if not tgt:
         die("could not detect the hub vhost (/etc/httpd/sites.d/%s-ssl.conf)" % ARGS.hub)
+    if "trac" in targets and (detect_handler() or ARGS.trac_handler) != "mod_wsgi":
+        warn("trac self-test supports the mod_wsgi handler only -- skipping trac")
+        targets = [s for s in targets if s != "trac"]
+    if not targets:
+        die("nothing to test after skips")
+
     name = "hzforge-selftest-%d" % os.getpid()
-    env = os.path.join(TOOLS_DIR, name)
-    step("Self-test: throwaway Trac env '%s' via %s://%s" % (name, tgt["scheme"], tgt["host"]))
+    step("Self-test: %s -- throwaway name '%s' via %s://%s"
+         % (",".join(targets), name, tgt["scheme"], tgt["host"]))
     if CTX.dry:
-        log("[dry-run] would initenv %s, curl /tools/%s/wiki, then remove it" % (env, name))
+        log("[dry-run] would create throwaway %s, curl each, then remove" % ",".join(targets))
         return
-    if os.path.exists(env):
-        die("test env path already exists: %s" % env)
-    ok = False
+
+    conf = _selftest_conf_path()
+    if os.path.exists(conf):
+        die("stale self-test conf present: %s (remove it and retry)" % conf)
+    created, results = [], {}
+    route_lines = ["# hzforge self-test routes -- throwaway, removed automatically",
+                   "RewriteEngine On", ""]
+    route_svcs = [s for s in targets if s != "trac"]
     try:
-        run(["trac-admin", env, "initenv", name, "sqlite:db/trac.db"], capture=True)
-        run(["chown", "-R", "apache:apache", env])
-        code, body = _curl(tgt, "/tools/%s/wiki" % name)
-        is_trac = code == "200" and ("Trac" in body or "Wiki" in body
-                                     or "powered by" in body.lower())
-        log("GET /tools/%s/wiki -> HTTP %s%s" % (name, code, "  (Trac)" if is_trac else ""))
-        ok = is_trac
+        if "trac" in targets:
+            env = os.path.join(OPT["trac_tools"][0], name)
+            if os.path.exists(env):
+                die("test path already exists: %s" % env)
+            run(["trac-admin", env, "initenv", name, "sqlite:db/trac.db"], capture=True)
+            run(["chown", "-R", "apache:apache", env]); created.append(env)
+        if "svn" in targets:
+            repo = os.path.join(OPT["svn_tools"][0], name)
+            if os.path.exists(repo):
+                die("test path already exists: %s" % repo)
+            run(["svnadmin", "create", repo], capture=True)
+            run(["chown", "-R", "apache:apache", repo]); created.append(repo)
+            route_lines += _svn_route(name, repo)
+        for gsvc, key in (("git", "git_tools"), ("gitExternal", "gext_tools")):
+            if gsvc in targets:
+                root = OPT[key][0]
+                repo = os.path.join(root, name + ".git")
+                if os.path.exists(repo):
+                    die("test path already exists: %s" % repo)
+                run(["git", "init", "--bare", "-q", repo], capture=True)
+                run(["chown", "-R", "apache:apache", repo]); created.append(repo)
+                route_lines += _git_route(gsvc, name, root, repo)
+        if route_svcs:
+            write_file(conf, "\n".join(route_lines).rstrip() + "\n", 0o640)
+            _reload_for_test("add self-test routes")
+        if "trac" in targets:        results["trac"] = _check_trac(tgt, name)
+        if "svn" in targets:         results["svn"] = _check_svn(tgt, name)
+        if "git" in targets:         results["git"] = _check_git(tgt, "git", name)
+        if "gitExternal" in targets: results["gitExternal"] = _check_git(tgt, "gitExternal", name)
     finally:
-        if os.path.isdir(env):
-            run(["rm", "-rf", env], check=False)
-            log("removed throwaway env")
-    if not ok:
-        die("self-test FAILED -- Trac did not serve the throwaway env")
-    step("Self-test PASSED")
+        for p in created:
+            if os.path.isdir(p):
+                run(["rm", "-rf", p], check=False)
+        if os.path.exists(conf):
+            _remove_file(conf)
+            _reload_for_test("remove self-test routes")
+        log("removed throwaway resources")
+
+    failed = [s for s in targets if results.get(s) is False]
+    if failed:
+        die("self-test FAILED: %s" % ", ".join(failed))
+    step("Self-test PASSED: %s" % ", ".join(targets))
 
 
 # ---------------------------------------------------------------------------- #
@@ -823,9 +929,12 @@ def do_install():
     fix_pip_perms()
     write_dropin(s)
     apply_changes()
-    # verify trac actually serves, unless suppressed / not applicable
-    if ("trac" in s and ARGS.trac_handler == "mod_wsgi"
-            and not ARGS.no_test and not ARGS.no_restart and not CTX.dry):
+    # verify the just-installed services actually serve, unless suppressed.
+    # mod_python Trac has no self-test, so drop it from the testable set.
+    testable = [x for x in s if x in TESTABLE]
+    if "trac" in testable and ARGS.trac_handler != "mod_wsgi":
+        testable = [x for x in testable if x != "trac"]
+    if testable and not ARGS.no_test and not ARGS.no_restart and not CTX.dry:
         cmd_test()
 
 
@@ -1030,8 +1139,10 @@ def build_parser():
     prp = sub.add_parser("repair", parents=[common], help="diagnose then fix drift")
     prp.add_argument("services", nargs="*", metavar="SERVICE",
                      help=svc_help + " to re-assert; default: all configured")
-    sub.add_parser("test", parents=[common],
-                   help="create a throwaway Trac project and verify it serves")
+    pt = sub.add_parser("test", parents=[common],
+                        help="create throwaway projects and verify each service serves")
+    pt.add_argument("services", nargs="*", metavar="SERVICE",
+                    help=svc_help + " to test; default: all configured")
     return p
 
 
@@ -1058,7 +1169,7 @@ def main():
     args.include_dir = "/etc/httpd/%s.conf.d" % args.hub
     # services come in as bare positional args (a list); allow comma-joined too
     services = []
-    for tok in (getattr(args, "services", None) or []):   # 'test' has no positional
+    for tok in (getattr(args, "services", None) or []):   # positional on install/uninstall/doctor/repair/test
         services += [s for s in tok.split(",") if s]
     bad = [s for s in services if s not in ALL_SERVICES]
     if bad:

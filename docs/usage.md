@@ -16,7 +16,8 @@ sudo python3 hzforge.py doctor                           # diagnose all configur
 sudo python3 hzforge.py doctor git                       # diagnose one service
 sudo python3 hzforge.py repair                           # fix drift
 sudo python3 hzforge.py repair trac
-sudo python3 hzforge.py test                             # create a throwaway Trac project, verify, remove
+sudo python3 hzforge.py test                             # throwaway project per configured service, verify, remove
+sudo python3 hzforge.py test svn git                     # only the named services
 ```
 
 Preview any command without changing anything:
@@ -54,13 +55,23 @@ Diagnose, then re-assert the requested (configured) services — fixing missing
 shim/dirs, file permissions, and module state — then validate and reload/restart.
 `repair git` is isolated to git; it won't touch trac.
 
-### test
-End-to-end self-check for the Trac (mod_wsgi) handler: creates a throwaway,
-uniquely-named Trac environment under `/opt/trac/tools/`, fetches
-`/tools/<name>/wiki` over the hub's own vhost, asserts a `200` Trac response, then
-removes the environment. It needs no MySQL/forge provisioning — the WSGI shim
-serves any env generically — and exits non-zero on failure (handy for CI). Runs
-automatically at the end of `install trac`.
+### test `[services]`
+End-to-end self-check per service. For each requested (configured) service it creates
+a throwaway, uniquely-named project, fetches it over the hub's own vhost, asserts a
+`200`, then removes it. No services = all configured.
+
+| Service | Resource created | URL checked | Pass signal |
+|---|---|---|---|
+| `trac` | Trac env under `/opt/trac/tools/` | `/tools/<name>/wiki` | Trac wiki page |
+| `svn` | repo via `svnadmin create` under `/opt/svn/tools/` | `/tools/<name>/svn/` | mod_dav_svn listing |
+| `git` / `gitExternal` | bare repo under `/opt/<svc>/tools/<name>.git` | `…/git/<name>/info/refs?service=git-upload-pack` | git-http-backend advertisement |
+
+It needs no MySQL/forge provisioning. `trac` is served by hzforge's generic WSGI route
+(no config change); `svn`/`git` need a per-repo route, so a temporary self-test drop-in
+(`00-forge-selftest.conf`) is added and removed around the checks (graceful reload). The
+mod_python Trac handler has no self-test. Exits non-zero on failure (handy for CI). The
+just-installed services are tested automatically at the end of `install` (skip with
+`--no-test`).
 
 ## Options (install)
 

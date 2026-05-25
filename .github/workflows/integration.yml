@@ -1,10 +1,11 @@
 name: integration
 
 # End-to-end test on the real target OS (EL8) in a rockylinux:8 container:
-# stage a minimal hub vhost, run a faithful `hzforge install trac` (real hubzero
-# packages), then `hzforge test` (throwaway Trac project -> HTTP 200) and doctor.
+# stage a minimal hub vhost, run a faithful `hzforge install trac svn git` (real
+# hubzero packages), then `hzforge test` (throwaway trac+svn+git projects, each
+# served over HTTP -> 200) and doctor.
 #
-# Containers have no systemd, so hzforge's apache_apply() falls back to apachectl.
+# Containers have no systemd, so hzforge drives `httpd -k` directly.
 
 on:
   push:
@@ -21,7 +22,7 @@ on:
 
 jobs:
   el8:
-    name: EL8 install trac + self-test
+    name: EL8 install trac+svn+git + self-test
     runs-on: ubuntu-latest
     container:
       image: rockylinux:8
@@ -97,10 +98,10 @@ jobs:
           sed -i 's/^Listen 80$/# Listen 80 (superseded by the test vhost)/' \
             /etc/httpd/conf/httpd.conf
 
-      - name: hzforge install trac (real packages) — appstream svn source
-        run: python3 hzforge.py install trac --hub testhub --svn-source appstream --no-test
+      - name: hzforge install trac svn git (real packages) — appstream svn source
+        run: python3 hzforge.py install trac svn git --hub testhub --svn-source appstream --no-test
 
-      - name: hzforge test (throwaway Trac project -> HTTP 200)
+      - name: hzforge test (throwaway trac+svn+git projects -> HTTP 200)
         run: python3 hzforge.py test --hub testhub
 
       - name: hzforge doctor
