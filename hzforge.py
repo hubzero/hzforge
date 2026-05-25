@@ -968,16 +968,15 @@ def uninstall(remove):
     handler = detect_handler() or ARGS.trac_handler
     ARGS.trac_handler = handler
     actual = [s for s in remove if s in configured]      # only what's actually wired
-    for s in remove:
-        if s not in configured:
-            warn("'%s' is not configured here -> nothing to uninstall" % s)
+    skipped = [s for s in remove if s not in configured]
     if not actual:
-        step("Uninstall: none of %s are configured (configured=%s) -- nothing to do"
+        step("Uninstall: %s not configured (configured=%s) -- nothing to do"
              % (",".join(remove), ",".join(configured) or "-"))
         return                              # leave the running server untouched
     remaining = [x for x in configured if x not in actual]
-    step("Uninstall %s   (configured=%s -> remaining=%s)"
-         % (",".join(actual), ",".join(configured) or "-", ",".join(remaining) or "-"))
+    skip = "  [skipping %s: not configured]" % ",".join(skipped) if skipped else ""
+    step("Uninstall %s   (configured=%s -> remaining=%s)%s"
+         % (",".join(actual), ",".join(configured) or "-", ",".join(remaining) or "-", skip))
     ARGS.services = remaining
     for svc in actual:
         _remove_file(dropin_path(svc))      # each service is its own file
