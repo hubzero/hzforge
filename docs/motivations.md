@@ -17,15 +17,14 @@ so a hub can move when ready. See [migration](../../operations/migration/).
 
 ## Drop-ins instead of the m4 template
 
-The HUBzero vhost is generated from an m4 template by `hzcms`. Putting Forge service
+The HUBzero vhost is generated from an m4 template. Putting Forge service
 config there means:
 
-- every change requires regenerating the vhost (and `hzcms` is not safe to run on
-  some hosts), and
+- every change requires regenerating the vhost (and regenerating it is not always safe), and
 - a future regeneration silently clobbers hand edits.
 
 hzforge instead writes plain Apache config into `/etc/httpd/<hub>.conf.d/`, which
-the vhost already includes. The config is **independent of the m4/`hzcms`
+the vhost already includes. The config is **independent of the m4 vhost
 lifecycle**: it survives vhost regeneration and needs no template toggles.
 
 > The per-tool `svn.conf` / `git.conf` blocks are still produced by the hub's
@@ -42,9 +41,8 @@ That keeps the lifecycle simple and isolated:
 - `doctor <svc>` / `repair <svc>` scope to one service, while genuinely global
   checks (`configtest`, interpreter state) always run.
 
-## Modeled on hzcms
+## What it sets up
 
-The directory layout, permissions, and `hzsvn`/`hzgit` group handling follow
-`hzcms`'s `subversionConfigure` / `gitConfigure` / `tracConfigure`. The difference
-is that hzforge also **installs the packages** (which `hzcms` leaves to rpm deps)
-and writes drop-ins rather than regenerating the vhost.
+hzforge creates the per-service `/opt/<svc>/tools` directories with conventional
+permissions, creates the `hzsvn`/`hzgit` groups, installs the required packages, and
+writes the per-service drop-ins -- rather than regenerating the m4 vhost.

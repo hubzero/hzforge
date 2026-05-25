@@ -2,11 +2,10 @@
 """
 hzforge -- install / uninstall / doctor / repair HUBzero Forge services
 (svn, git, gitExternal, trac) as Apache drop-ins, independent of the m4
-template / hzcms.
+vhost template.
 
-Modeled on hzcms's subversionConfigure/gitConfigure/tracConfigure (dirs, perms,
-hzsvn/hzgit groups) but it ALSO installs the packages (which hzcms leaves to rpm
-deps) and writes the Apache config as one drop-in per service
+It creates the per-service dirs and the hzsvn/hzgit groups, installs the
+required packages, and writes the Apache config as one drop-in per service
 (/etc/httpd/<hub>.conf.d/00-forge-<svc>.conf) instead of regenerating the m4 vhost.
 
 Per-tool svn.conf/git.conf/gitExternal.conf are NOT generated here -- they come
@@ -271,7 +270,7 @@ def ensure_subversion_packages():
 
 
 # ---------------------------------------------------------------------------- #
-# Subsystem setup (dirs/groups/packages) -- modeled on hzcms *Configure()
+# Subsystem setup (dirs / groups / packages)
 # ---------------------------------------------------------------------------- #
 def setup_svn():
     step("Subversion (DAV) -- packages, group, dirs")

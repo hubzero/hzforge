@@ -28,7 +28,7 @@ sudo python3 hzforge.py install --dry-run
 ## Commands
 
 ### install `[services]`
-Install packages, create `/opt/<svc>/tools` dirs (perms modeled on `hzcms`), join
+Install packages, create `/opt/<svc>/tools` dirs (conventional perms), join
 `hzsvn`/`hzgit` groups if present, and write the per-service drop-in(s). No
 services = all four. Consolidates a legacy standalone `trac.conf` into the trac
 drop-in.

@@ -21,8 +21,7 @@
 
 `hzforge` installs, uninstalls, diagnoses, and repairs **HUBzero Forge
 services** &mdash; Subversion, Git, gitExternal, and Trac &mdash; as
-self-contained Apache **drop-ins**, independent of the m4 vhost template and
-`hzcms`.
+self-contained Apache **drop-ins**, independent of the m4 vhost template.
 
 On a HUBzero hub each tool gets a project area under `/tools/<name>/…`:
 
@@ -36,7 +35,7 @@ On a HUBzero hub each tool gets a project area under `/tools/<name>/…`:
 hzforge writes **one config file per service** at
 `/etc/httpd/<hub>.conf.d/00-forge-<svc>.conf`, picked up by the vhost's existing
 `IncludeOptional <hub>.conf.d/*.conf` &mdash; so it never edits the m4-generated
-vhost or requires running `hzcms`. The per-tool `svn.conf` / `git.conf` blocks
+vhost or requires regenerating the vhost. The per-tool `svn.conf` / `git.conf` blocks
 still come from the hub's existing MySQL-driven generator; hzforge only *includes*
 them and shields them from the CMS catch-all rewrite.
 
@@ -45,7 +44,7 @@ them and shields them from the CMS catch-all rewrite.
 Full docs: **<https://hubzero.github.io/hzforge/>** (sources under [`docs/`](docs/)).
 
 - [Summary](https://hubzero.github.io/hzforge/overview/summary/) &mdash; what it is, at a glance
-- [Motivations](https://hubzero.github.io/hzforge/overview/motivations/) &mdash; why it bypasses the m4/`hzcms`
+- [Motivations](https://hubzero.github.io/hzforge/overview/motivations/) &mdash; why it bypasses the m4 vhost
 - [Architecture](https://hubzero.github.io/hzforge/reference/architecture/) &mdash; how the drop-ins are wired
 - [Services](https://hubzero.github.io/hzforge/reference/services/) &mdash; the four services in detail
 - [Usage](https://hubzero.github.io/hzforge/operations/usage/) &mdash; full command reference
@@ -70,7 +69,7 @@ sudo python3 hzforge.py repair                  # fix drift
 
 | Command | What it does |
 |---|---|
-| `install [services]` | Install packages, create `/opt/<svc>/tools` dirs (perms modeled on `hzcms`), join `hzsvn`/`hzgit` groups if present, write the drop-in(s). No services = all. |
+| `install [services]` | Install packages, create `/opt/<svc>/tools` dirs (conventional perms), join `hzsvn`/`hzgit` groups if present, write the drop-in(s). No services = all. |
 | `uninstall <services> [--purge]` | Remove a service's drop-in (and, for trac, unload its interpreter). **Never** deletes repo data; `--purge` also removes packages/artifacts. |
 | `doctor [services]` | Read-only diagnosis; exits non-zero on FAIL. Service checks scope to the request; global checks (`configtest`, interpreter state) always run. |
 | `repair [services]` | Diagnose, then re-assert the requested services and fix drift, then validate + reload/restart. |

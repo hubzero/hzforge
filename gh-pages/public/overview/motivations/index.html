@@ -68,7 +68,7 @@
 <li class="toc__item toc__item--level-2"><a href="#off-obsolete-mod-python">Off obsolete mod_python</a></li>
 <li class="toc__item toc__item--level-2"><a href="#drop-ins-instead-of-the-m4-template">Drop-ins instead of the m4 template</a></li>
 <li class="toc__item toc__item--level-2"><a href="#one-file-per-service">One file per service</a></li>
-<li class="toc__item toc__item--level-2"><a href="#modeled-on-hzcms">Modeled on hzcms</a></li>
+<li class="toc__item toc__item--level-2"><a href="#what-it-sets-up">What it sets up</a></li>
   </ul>
 </nav>
         <div class="prose">
@@ -107,15 +107,14 @@ identical across the migration — only the <code>LoadModule</code> line and the
 change. hzforge can deploy either handler (<code>--trac-handler mod_wsgi|mod_python</code>)
 so a hub can move when ready. See <a href="../../operations/migration/">migration</a>.</p>
 <h2 id="drop-ins-instead-of-the-m4-template">Drop-ins instead of the m4 template</h2>
-<p>The HUBzero vhost is generated from an m4 template by <code>hzcms</code>. Putting Forge service
+<p>The HUBzero vhost is generated from an m4 template. Putting Forge service
 config there means:</p>
 <ul>
-<li>every change requires regenerating the vhost (and <code>hzcms</code> is not safe to run on
-some hosts), and</li>
+<li>every change requires regenerating the vhost (and regenerating it is not always safe), and</li>
 <li>a future regeneration silently clobbers hand edits.</li>
 </ul>
 <p>hzforge instead writes plain Apache config into <code>/etc/httpd/&lt;hub&gt;.conf.d/</code>, which
-the vhost already includes. The config is <strong>independent of the m4/<code>hzcms</code>
+the vhost already includes. The config is <strong>independent of the m4 vhost
 lifecycle</strong>: it survives vhost regeneration and needs no template toggles.</p>
 <blockquote>
 <p>The per-tool <code>svn.conf</code> / <code>git.conf</code> blocks are still produced by the hub's
@@ -131,11 +130,10 @@ That keeps the lifecycle simple and isolated:</p>
 <li><code>doctor &lt;svc&gt;</code> / <code>repair &lt;svc&gt;</code> scope to one service, while genuinely global
 checks (<code>configtest</code>, interpreter state) always run.</li>
 </ul>
-<h2 id="modeled-on-hzcms">Modeled on hzcms</h2>
-<p>The directory layout, permissions, and <code>hzsvn</code>/<code>hzgit</code> group handling follow
-<code>hzcms</code>'s <code>subversionConfigure</code> / <code>gitConfigure</code> / <code>tracConfigure</code>. The difference
-is that hzforge also <strong>installs the packages</strong> (which <code>hzcms</code> leaves to rpm deps)
-and writes drop-ins rather than regenerating the vhost.</p>
+<h2 id="what-it-sets-up">What it sets up</h2>
+<p>hzforge creates the per-service <code>/opt/&lt;svc&gt;/tools</code> directories with conventional
+permissions, creates the <code>hzsvn</code>/<code>hzgit</code> groups, installs the required packages, and
+writes the per-service drop-ins -- rather than regenerating the m4 vhost.</p>
 
         </div>
       </article>

@@ -3,9 +3,9 @@
 hzforge manages four Forge services. Each is an independent drop-in; install,
 uninstall, and diagnose them separately.
 
-Shared setup for every service (modeled on `hzcms`):
+Shared setup for every service:
 
-- create `/opt/<svc>/tools` with hzcms's permissions;
+- create `/opt/<svc>/tools` with conventional permissions;
 - create the `hzsvn` / `hzgit` group if missing (forge `chgrp`s repos to it; the
   `apache` + `apps` membership those repos need is provisioned by the forge setup);
 - create the `<hub>.conf.d/{svn,git}` include dirs (0700, apache);

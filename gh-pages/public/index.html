@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>hzforge</title>
-  <meta name="description" content="Documentation for hzforge: one tool that installs, uninstalls, diagnoses, and repairs HUBzero per-tool Subversion, Git, gitExternal, and Trac services as self-contained Apache drop-ins — independent of the m4 template and hzcms.">
+  <meta name="description" content="Documentation for hzforge: one tool that installs, uninstalls, diagnoses, and repairs HUBzero per-tool Subversion, Git, gitExternal, and Trac services as self-contained Apache drop-ins — independent of the m4 vhost template.">
   <link rel="stylesheet" href="assets/site.css">
 </head>
 <body class="site-home">
@@ -66,12 +66,12 @@
 <div class="prose">
 <p>Documentation for <code>hzforge</code> — the tool that installs, uninstalls, diagnoses, and
 repairs HUBzero Forge services (Subversion, Git, gitExternal, Trac) as
-self-contained Apache drop-ins, independent of the m4 template and <code>hzcms</code>.</p>
+self-contained Apache drop-ins, independent of the m4 vhost template.</p>
 <p>Read in roughly this order if new to the project:</p>
 <ol>
 <li><strong><a href="overview/summary/">summary.md</a></strong> — what hzforge is, the four services, and the
 commands at a glance.</li>
-<li><strong><a href="overview/motivations/">motivations.md</a></strong> — why it bypasses the m4/<code>hzcms</code>, the
+<li><strong><a href="overview/motivations/">motivations.md</a></strong> — why it bypasses the m4 vhost, the
 mod_python → mod_wsgi migration, and the one-file-per-service model.</li>
 <li><strong><a href="reference/architecture/">architecture.md</a></strong> — how the drop-ins are wired:
 alias-vs-<code>&lt;Location&gt;</code> handlers and the <code>[END]</code> carve-out, the WSGI shim, the

@@ -2,13 +2,13 @@
 
 Documentation for `hzforge` — the tool that installs, uninstalls, diagnoses, and
 repairs HUBzero Forge services (Subversion, Git, gitExternal, Trac) as
-self-contained Apache drop-ins, independent of the m4 template and `hzcms`.
+self-contained Apache drop-ins, independent of the m4 vhost template.
 
 Read in roughly this order if new to the project:
 
 1. **[summary.md](summary.md)** — what hzforge is, the four services, and the
    commands at a glance.
-2. **[motivations.md](motivations.md)** — why it bypasses the m4/`hzcms`, the
+2. **[motivations.md](motivations.md)** — why it bypasses the m4 vhost, the
    mod_python → mod_wsgi migration, and the one-file-per-service model.
 3. **[architecture.md](architecture.md)** — how the drop-ins are wired:
    alias-vs-`<Location>` handlers and the `[END]` carve-out, the WSGI shim, the

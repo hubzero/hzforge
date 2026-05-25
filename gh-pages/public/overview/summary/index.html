@@ -71,7 +71,7 @@
         <div class="prose">
 <p><code>hzforge</code> installs, uninstalls, diagnoses, and repairs <strong>HUBzero Forge
 services</strong> — Subversion, Git, gitExternal, and Trac — as self-contained Apache
-<strong>drop-ins</strong>, independent of the m4 vhost template and <code>hzcms</code>.</p>
+<strong>drop-ins</strong>, independent of the m4 vhost template.</p>
 <p>On a HUBzero hub each tool gets a project area under <code>/tools/&lt;name&gt;/…</code>:</p>
 <table>
 <thead>
@@ -107,7 +107,7 @@ services</strong> — Subversion, Git, gitExternal, and Trac — as self-contain
 <p>hzforge writes <strong>one config file per service</strong> at
 <code>/etc/httpd/&lt;hub&gt;.conf.d/00-forge-&lt;svc&gt;.conf</code>, picked up by the vhost's existing
 <code>IncludeOptional &lt;hub&gt;.conf.d/*.conf</code> — so it never edits the m4-generated vhost
-or requires running <code>hzcms</code>.</p>
+or requires regenerating the vhost.</p>
 <h2 id="commands-at-a-glance">Commands at a glance</h2>
 <pre><code>sudo python3 hzforge.py install                 # all services
 sudo python3 hzforge.py install trac            # one service (positional)
@@ -119,7 +119,7 @@ sudo python3 hzforge.py repair                  # fix drift
 </code></pre>
 <p>Preview any command with <code>--dry-run</code>; nothing touches the running server until
 <code>apachectl configtest</code> passes.</p>
-<p>See <strong><a href="../motivations/">motivations</a></strong> for why it bypasses the m4/<code>hzcms</code>,
+<p>See <strong><a href="../motivations/">motivations</a></strong> for why it bypasses the m4 vhost,
 <strong><a href="../../reference/architecture/">architecture</a></strong> for how the drop-ins are wired,
 <strong><a href="../../reference/services/">services</a></strong> for the four services, and
 <strong><a href="../../operations/usage/">usage</a></strong> for the full command reference.</p>

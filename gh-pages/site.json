@@ -1,7 +1,7 @@
 {
   "site_name": "hzforge",
   "site_tagline": "Install, diagnose, and repair HUBzero Forge services as Apache drop-ins.",
-  "site_description": "Documentation for hzforge: one tool that installs, uninstalls, diagnoses, and repairs HUBzero per-tool Subversion, Git, gitExternal, and Trac services as self-contained Apache drop-ins — independent of the m4 template and hzcms.",
+  "site_description": "Documentation for hzforge: one tool that installs, uninstalls, diagnoses, and repairs HUBzero per-tool Subversion, Git, gitExternal, and Trac services as self-contained Apache drop-ins — independent of the m4 vhost template.",
   "github_href": "https://github.com/hubzero/hzforge",
   "groups": [
     {
