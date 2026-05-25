@@ -769,12 +769,14 @@ def _svn_route(name, repo):
             '</Location>', '']
 
 
-def _git_route(svc, name, root, repo):
-    # http-backend route for the throwaway repo, mirroring the MySQL-generated conf
+def _git_route(svc, name, root, reponame):
+    # http-backend route for the throwaway repo, mirroring the MySQL-generated conf.
+    # On-disk layout differs by service: git -> <name>.git, gitExternal -> <name>
+    # (passed in as reponame), so the CGI PATH_INFO must match.
     return ['SetEnvIf Request_URI "^/tools/%s/%s/%s/" GIT_PROJECT_ROOT=%s' % (name, svc, name, root),
             'SetEnv GIT_HTTP_EXPORT_ALL',
             'ScriptAliasMatch "^/tools/%s/%s/%s/(.*)$" '
-            '/usr/libexec/git-core/git-http-backend/%s.git/$1' % (name, svc, name, name),
+            '/usr/libexec/git-core/git-http-backend/%s/$1' % (name, svc, name, reponame),
             '<LocationMatch "^/tools/%s/%s">' % (name, svc),
             '    Require all granted',          # anonymous read for the throwaway repo
             '</LocationMatch>', '']
@@ -873,12 +875,15 @@ def cmd_test():
         for gsvc, key in (("git", "git_tools"), ("gitExternal", "gext_tools")):
             if gsvc in targets:
                 root = OPT[key][0]
-                repo = os.path.join(root, name + ".git")
+                # on-disk layout matches the forge convention: git -> <name>.git,
+                # gitExternal -> <name> (no suffix)
+                reponame = name + ".git" if gsvc == "git" else name
+                repo = os.path.join(root, reponame)
                 if os.path.exists(repo):
                     die("test path already exists: %s" % repo)
                 run(["git", "init", "--bare", "-q", repo], capture=True)
                 run(["chown", "-R", "apache:apache", repo]); created.append(repo)
-                route_lines += _git_route(gsvc, name, root, repo); routed = True
+                route_lines += _git_route(gsvc, name, root, reponame); routed = True
         if routed:
             write_file(conf, "\n".join(route_lines).rstrip() + "\n", 0o640)
             _reload_for_test("add self-test routes")
