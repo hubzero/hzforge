@@ -19,8 +19,8 @@
     {
       "slug": "operations",
       "title": "Operations",
-      "summary": "Command reference and the mod_python → mod_wsgi migration.",
-      "pages": ["usage", "migration"]
+      "summary": "Prerequisites, command reference, and the mod_python → mod_wsgi migration.",
+      "pages": ["requirements", "usage", "migration"]
     }
   ]
 }

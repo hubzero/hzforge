@@ -15,9 +15,11 @@ Read in roughly this order if new to the project:
    Trac handlers, and the restart-vs-reload logic.
 4. **[services.md](services.md)** — the four services in detail (svn, git,
    gitExternal, trac): packages, repo dirs, and per-service config.
-5. **[usage.md](usage.md)** — full command reference: install / uninstall /
+5. **[requirements.md](requirements.md)** — host, Python, packages/repos, and
+   network prerequisites for running hzforge.
+6. **[usage.md](usage.md)** — full command reference: install / uninstall /
    doctor / repair, options, exit codes, and safety flags.
-6. **[migration.md](migration.md)** — mod_python → mod_wsgi runbook, the gotchas
+7. **[migration.md](migration.md)** — mod_python → mod_wsgi runbook, the gotchas
    hzforge handles, and the Stage 2 (Python 3 / Trac 1.6) path.
 
 For a quick CLI reference:

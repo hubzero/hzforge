@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Requirements | hzforge</title>
+  <meta name="description" content="Prerequisites, command reference, and the mod_python → mod_wsgi migration.">
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body class="site-doc">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="site-header site-header--compact">
+      <a class="brand" href="../../index.html">
+        <span class="brand__name">hzforge</span>
+      </a>
+      <span class="site-header__beta" aria-label="Beta release">Beta</span>
+      <nav class="top-nav" aria-label="Primary">
+        <a href="https://github.com/hubzero/hzforge">GitHub</a>
+        <a href="../../index.html">Home</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="docs-layout" tabindex="-1">
+      <aside class="docs-sidebar">
+        <p class="docs-sidebar__eyebrow">Sections</p>
+        <nav class="docs-nav" aria-label="Documentation">
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../index.html">Homepage</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../index.html">Home</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../overview/index.html">Overview</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../overview/summary/index.html">Summary</a></li>
+    <li><a class="docs-nav__item" href="../../overview/motivations/index.html">Motivations</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title" href="../../reference/index.html">Reference</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item" href="../../reference/architecture/index.html">Architecture</a></li>
+    <li><a class="docs-nav__item" href="../../reference/services/index.html">Services</a></li>
+  </ul>
+</div>
+<div class="docs-nav__group">
+  <a class="docs-nav__group-title is-active" href="../index.html">Operations</a>
+  <ul class="docs-nav__list">
+    <li><a class="docs-nav__item is-active" href="index.html">Requirements</a></li>
+    <li><a class="docs-nav__item" href="../usage/index.html">Usage</a></li>
+    <li><a class="docs-nav__item" href="../migration/index.html">Migration: mod_python → mod_wsgi</a></li>
+  </ul>
+</div>
+        </nav>
+      </aside>
+
+      <article class="docs-article">
+        <header class="docs-article__header">
+          <p class="eyebrow"><a href="../index.html">Operations</a></p>
+          <h1>Requirements</h1>
+          <p class="docs-article__source">Source: <code>docs/requirements.md</code></p>
+        </header>
+<nav class="toc" aria-label="On this page">
+  <p class="toc__heading">On this page</p>
+  <ul class="toc__list">
+<li class="toc__item toc__item--level-2"><a href="#host">Host</a></li>
+<li class="toc__item toc__item--level-2"><a href="#python">Python</a></li>
+<li class="toc__item toc__item--level-2"><a href="#packages-repositories">Packages &amp; repositories</a></li>
+<li class="toc__item toc__item--level-2"><a href="#network">Network</a></li>
+<li class="toc__item toc__item--level-2"><a href="#per-tool-content">Per-tool content</a></li>
+  </ul>
+</nav>
+        <div class="prose">
+<p>hzforge runs on the HUBzero web node and configures Apache there. It must be run
+as <strong>root</strong> (<code>sudo</code>).</p>
+<h2 id="host">Host</h2>
+<ul>
+<li><strong>Rocky / RHEL 8</strong> with <strong>Apache httpd 2.4</strong> (<code>mod_rewrite</code>, plus the standard
+HUBzero vhost, which includes <code>IncludeOptional &lt;hub&gt;.conf.d/*.conf</code> — that's how
+hzforge's drop-ins get loaded).</li>
+<li>Root access — hzforge installs packages, writes Apache config, and reloads/restarts
+httpd.</li>
+</ul>
+<h2 id="python">Python</h2>
+<ul>
+<li><strong>Python 3.8+</strong> to run <code>hzforge.py</code> itself.</li>
+<li><strong>Python 2.7</strong> for the Trac stack it manages — the HUBzero Trac plugins and, for the
+mod_wsgi handler, the pip-built <code>Trac</code> and <code>mod_wsgi==4.9.4</code> (the last
+Python-2-capable mod_wsgi release).</li>
+</ul>
+<p>These are separate interpreters: hzforge is a Python 3 orchestration script that sets
+up a Python 2 Trac runtime.</p>
+<h2 id="packages-repositories">Packages &amp; repositories</h2>
+<ul>
+<li>The <strong><code>hubzero</code> yum repo</strong> — provides <code>hubzero-trac</code>, <code>hubzero-trac-mysqlauthz</code>
+(the <code>HubzeroPermissionStore</code> / <code>hubzeroplugin</code> components the Trac environments
+require), and <code>subversion-python</code> (the Py2 SVN bindings for the Trac repo browser).</li>
+<li><strong>Subversion / <code>mod_dav_svn</code></strong> — from <strong><code>wandisco-svn110</code></strong> by default
+(<code>--svn-source appstream</code> uses the appstream <code>subversion:1.10</code> module instead).
+hzforge writes the wandisco repo file when it's needed.</li>
+<li><strong><code>git</code></strong> — for the <code>git</code> and <code>gitExternal</code> services (<code>git-http-backend</code>).</li>
+<li>A build toolchain for the pip-built mod_wsgi (<code>gcc</code>, <code>python2-devel</code>, <code>httpd-devel</code>)
+— pulled in as needed.</li>
+</ul>
+<h2 id="network">Network</h2>
+<ul>
+<li><strong><code>opensource.wandisco.com</code></strong> — when <code>--svn-source wandisco</code> (the svn default).</li>
+<li><strong>PyPI</strong> — for the mod_wsgi Trac handler (builds <code>Trac</code> and <code>mod_wsgi==4.9.4</code>).</li>
+<li><strong>Local LDAP</strong> (<code>127.0.0.1</code>) — the Trac <code>/login</code> auth block binds to the hub's LDAP;
+credentials are auto-detected from the generated <code>svn.conf</code>.</li>
+</ul>
+<h2 id="per-tool-content">Per-tool content</h2>
+<p>hzforge <strong>includes</strong> the per-tool <code>svn.conf</code> / <code>git.conf</code> / <code>gitExternal.conf</code> blocks
+produced by the hub's existing MySQL-driven generator — it does not generate them. The
+Trac environments live under <code>/opt/trac/tools/&lt;name&gt;</code>, paired with the matching
+<code>/opt/svn/tools/&lt;name&gt;</code> repositories.</p>
+
+        </div>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>hzforge · <a href="../../index.html">Home</a></p>
+    </footer>
+  </div>
+</body>
+</html>
