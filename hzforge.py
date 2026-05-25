@@ -788,13 +788,13 @@ def doctor():
     ld = lambda b: "loaded" if b else "not loaded"
     if wsgi_disk and py_disk:
         _chk(r, "FAIL", "both mod_wsgi and mod_python enabled on disk -> httpd won't start (repair)")
-    if wsgi_disk != wsgi_run or py_disk != py_run:
-        _chk(r, "WARN", "interpreters differ from disk -- running (mod_wsgi %s, mod_python %s), "
-             "on-disk (mod_wsgi %s, mod_python %s); restart pending (repair)"
-             % (ld(wsgi_run), ld(py_run), ld(wsgi_disk), ld(py_disk)))
-    else:
-        _chk(r, "OK", "interpreter state consistent -- mod_wsgi %s, mod_python %s (running matches disk)"
-             % (ld(wsgi_disk), ld(py_disk)))
+    for name, run, disk in (("mod_wsgi", wsgi_run, wsgi_disk),
+                            ("mod_python", py_run, py_disk)):
+        if run == disk:
+            _chk(r, "OK", "%s: %s (running matches disk)" % (name, ld(disk)))
+        else:
+            _chk(r, "WARN", "%s: on-disk %s but running %s -- restart pending (repair)"
+                 % (name, ld(disk), ld(run)))
 
     out = subprocess.run(["apachectl", "configtest"], stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
