@@ -1,0 +1,94 @@
+name: integration
+
+# End-to-end test on the real target OS (EL8) in a rockylinux:8 container:
+# stage a minimal hub vhost, run a faithful `hzforge install trac` (real hubzero
+# packages), then `hzforge test` (throwaway Trac project -> HTTP 200) and doctor.
+#
+# Containers have no systemd, so hzforge's apache_apply() falls back to apachectl.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hzforge.py'
+      - '.github/workflows/integration.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'hzforge.py'
+      - '.github/workflows/integration.yml'
+  workflow_dispatch:
+
+jobs:
+  el8:
+    name: EL8 install trac + self-test
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:8
+    timeout-minutes: 25
+
+    steps:
+      - name: Tools for checkout
+        run: dnf -y install git tar gzip
+
+      - uses: actions/checkout@v4
+
+      - name: Enable repos (EPEL, PowerTools, hubzero) + base packages
+        run: |
+          set -eux
+          dnf -y install dnf-plugins-core epel-release
+          dnf config-manager --set-enabled powertools \
+            || dnf config-manager --set-enabled crb || true
+          cat >/etc/yum.repos.d/hubzero.repo <<'REPO'
+          [hubzero]
+          name=HUBzero
+          baseurl=http://packages.hubzero.org/rpm/julian-el8
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://packages.hubzero.org/rpm/hubzero-rpm-key-pub-2025
+          REPO
+          rpm --import https://packages.hubzero.org/rpm/hubzero-rpm-key-pub-2025
+          # python3 to run hzforge; python2 stack for Trac; build deps for pip mod_wsgi
+          dnf -y install python3 \
+            httpd httpd-devel mod_ssl \
+            python2 python2-pip python2-devel gcc redhat-rpm-config \
+            procps-ng which findutils
+
+      - name: Runtime dirs (no systemd-tmpfiles in a container)
+        run: mkdir -p /run/httpd && chown apache:apache /run/httpd
+
+      - name: Stage a minimal hub vhost
+        run: |
+          set -eux
+          mkdir -p /etc/httpd/sites.d /etc/httpd/testhub.conf.d /var/www/testhub
+          cat >/etc/httpd/sites.d/testhub-ssl.conf <<'VHOST'
+          Listen 127.0.0.1:80
+          <VirtualHost 127.0.0.1:80>
+              ServerName localhost
+              DocumentRoot /var/www/testhub
+              RewriteEngine On
+              <Directory /var/www/testhub>
+                  RewriteEngine On
+                  RewriteCond %{REQUEST_FILENAME} !-f
+                  RewriteCond %{REQUEST_FILENAME} !-d
+                  RewriteRule (.*) index.php
+              </Directory>
+              IncludeOptional testhub.conf.d/*.conf
+          </VirtualHost>
+          VHOST
+          # stock httpd.conf doesn't load sites.d (a hubzero convention) -- add it
+          grep -q 'sites.d/\*.conf' /etc/httpd/conf/httpd.conf \
+            || echo 'IncludeOptional sites.d/*.conf' >> /etc/httpd/conf/httpd.conf
+
+      - name: hzforge install trac (real packages) — appstream svn source
+        run: python3 hzforge.py install trac --hub testhub --svn-source appstream --no-test
+
+      - name: hzforge test (throwaway Trac project -> HTTP 200)
+        run: python3 hzforge.py test --hub testhub
+
+      - name: hzforge doctor
+        run: python3 hzforge.py doctor --hub testhub
+
+      - name: httpd error log on failure
+        if: failure()
+        run: tail -n 100 /var/log/httpd/*error* 2>/dev/null || true
