@@ -91,6 +91,10 @@ jobs:
           # stock httpd.conf doesn't load sites.d (a hubzero convention) -- add it
           grep -q 'sites.d/\*.conf' /etc/httpd/conf/httpd.conf \
             || echo 'IncludeOptional sites.d/*.conf' >> /etc/httpd/conf/httpd.conf
+          # stock httpd.conf has `Listen 80`; our vhost adds `Listen 127.0.0.1:80`.
+          # Both cover :80 and httpd refuses the duplicate bind -- drop the stock one.
+          sed -i 's/^Listen 80$/# Listen 80 (superseded by the test vhost)/' \
+            /etc/httpd/conf/httpd.conf
 
       - name: hzforge install trac (real packages) — appstream svn source
         run: python3 hzforge.py install trac --hub testhub --svn-source appstream --no-test
