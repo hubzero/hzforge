@@ -366,16 +366,22 @@ def _trac_modpython():
 
 
 def _modwsgi_so():
-    out = subprocess.run(["mod_wsgi-express", "module-config"],
-                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         universal_newlines=True).stdout or ""
+    try:
+        out = subprocess.run(["mod_wsgi-express", "module-config"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             universal_newlines=True).stdout or ""
+    except FileNotFoundError:
+        return ""                       # mod_wsgi not pip-installed yet (fresh host)
     m = re.search(r'LoadModule\s+wsgi_module\s+"([^"]+)"', out)
     return m.group(1) if m else ""
 
 
 def _ensure_modwsgi_loaded():
-    out = subprocess.run(["mod_wsgi-express", "module-config"], stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
+    try:
+        out = subprocess.run(["mod_wsgi-express", "module-config"], stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
+    except FileNotFoundError:
+        out = ""                        # not pip-installed yet (e.g. dry-run on a fresh host)
     load = next((l for l in out.splitlines() if l.startswith("LoadModule")),
                 'LoadModule wsgi_module "<run mod_wsgi-express module-config>"')
     home = next((l for l in out.splitlines() if l.startswith("WSGIPythonHome")),
