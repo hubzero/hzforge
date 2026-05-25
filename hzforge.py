@@ -944,19 +944,27 @@ def uninstall(remove):
     configured = detect_configured_services()
     handler = detect_handler() or ARGS.trac_handler
     ARGS.trac_handler = handler
-    remaining = [x for x in configured if x not in remove]
+    actual = [s for s in remove if s in configured]      # only what's actually wired
+    for s in remove:
+        if s not in configured:
+            warn("'%s' is not configured here -> nothing to uninstall" % s)
+    if not actual:
+        step("Uninstall: none of %s are configured (configured=%s) -- nothing to do"
+             % (",".join(remove), ",".join(configured) or "-"))
+        return                              # leave the running server untouched
+    remaining = [x for x in configured if x not in actual]
     step("Uninstall %s   (configured=%s -> remaining=%s)"
-         % (",".join(remove), ",".join(configured) or "-", ",".join(remaining) or "-"))
+         % (",".join(actual), ",".join(configured) or "-", ",".join(remaining) or "-"))
     ARGS.services = remaining
-    for svc in remove:
+    for svc in actual:
         _remove_file(dropin_path(svc))      # each service is its own file
-    if "trac" in remove:                    # trac is a single service -> fully removed
+    if "trac" in actual:                    # trac is a single service -> fully removed
         _disable_legacy_trac()
         (_ensure_modpython_unloaded if handler == "mod_python" else _ensure_modwsgi_unloaded)()
         _remove_file(SHIM_PATH)             # hzforge's own helper files for trac
         if os.path.isdir(EGG_CACHE):
             run(["rm", "-rf", EGG_CACHE], check=False)
-    if "svn" in remove:
+    if "svn" in actual:
         _remove_file(WANDISCO_REPO_PATH)    # hzforge wrote this repo file
     apply_changes()
     log("Packages, the hzsvn/hzgit groups, and all /opt repo data were left intact.")

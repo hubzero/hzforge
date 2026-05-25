@@ -41,7 +41,9 @@ installing trac it runs the **test** self-check automatically (skip with
 Remove a service's drop-in (and, for trac, unload its interpreter module) plus the
 helper files hzforge created for it — for trac the WSGI shim and egg cache, for svn
 the wandisco repo file. **Never** removes packages, the `hzsvn`/`hzgit` groups, or
-repository data under `/opt/<svc>/tools` (only the config/serving is torn down).
+repository data under `/opt/<svc>/tools` (only the config/serving is torn down). A
+requested service that isn't currently configured is reported and skipped; if none
+of the requested services are configured, the running server is left untouched.
 
 ### doctor `[services]`
 Read-only diagnosis; exits non-zero if anything is **FAIL**. Service-specific checks
