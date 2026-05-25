@@ -279,9 +279,16 @@ def ensure_subversion_packages():
     if _SVN_PKGS_DONE:
         return
     _SVN_PKGS_DONE = True
-    _enable_svn_source()
-    dnf_install(["subversion", "mod_dav_svn"], enablerepo=_svn_repo())
-    if not rpm_installed("subversion-python"):      # Py2 SWIG bindings, always from hubzero
+    need = [p for p in ("subversion", "mod_dav_svn", "subversion-python")
+            if not rpm_installed(p)]
+    if not need:
+        log("subversion packages already installed")
+        return
+    _enable_svn_source()                            # only when something's missing
+    svc = [p for p in ("subversion", "mod_dav_svn") if p in need]
+    if svc:                                         # subversion + mod_dav_svn from chosen source
+        dnf_install(svc, enablerepo=_svn_repo())
+    if "subversion-python" in need:                # Py2 SWIG bindings, always from hubzero
         dnf_install(["subversion-python"])
 
 
