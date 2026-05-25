@@ -242,15 +242,31 @@ def _svn_repo():
     return "wandisco-svn110" if ARGS.svn_source == "wandisco" else None
 
 
+def _svn_module_stream():
+    """The currently-enabled subversion module stream, or None."""
+    out = subprocess.run(["dnf", "-q", "module", "list", "--enabled", "subversion"],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         universal_newlines=True).stdout or ""
+    m = re.search(r"^subversion\s+(\S+)", out, re.M)
+    return m.group(1) if m else None
+
+
 def _enable_svn_source():
     """Make subversion-* installable (needed even for trac: hubzero-trac rpm-requires
     subversion-devel). Does NOT install anything itself."""
     if ARGS.svn_source == "wandisco":
         ensure_wandisco_repo()
-        # let non-modular wandisco packages supersede the appstream subversion module
-        run(["dnf", "-y", "module", "reset", "subversion"], check=False)
-    else:
+        # Only reset if a module stream is actually enabled; with module_hotfixes=1
+        # the non-modular wandisco packages then supersede it. (No stream -> nothing
+        # to reset.)
+        if _svn_module_stream():
+            run(["dnf", "-y", "module", "reset", "subversion"], check=False)
+        else:
+            log("subversion module: no stream enabled -> no reset needed")
+    elif _svn_module_stream() != "1.10":
         run(["dnf", "-y", "module", "enable", "subversion:1.10"], check=False)
+    else:
+        log("subversion module: 1.10 already enabled")
 
 
 _SVN_PKGS_DONE = False
