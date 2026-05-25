@@ -30,7 +30,9 @@ sudo python3 hzforge.py install --dry-run
 ### install `[services]`
 Install packages, create `/opt/<svc>/tools` dirs (conventional perms), create the
 `hzsvn`/`hzgit` groups, and write the per-service drop-in(s). No services = all
-four. Consolidates a legacy standalone `trac.conf` into the trac drop-in. After
+four. Consolidates a legacy standalone `trac.conf` into the trac drop-in. On a host
+without systemd (a container or chroot) it also creates the `/run/httpd` runtime dir
+that `httpd -k start` needs, since `systemd-tmpfiles` isn't there to make it. After
 installing trac it runs the **test** self-check automatically (skip with
 `--no-test`).
 
@@ -42,8 +44,10 @@ repository data under `/opt/<svc>/tools` (only the config/serving is torn down).
 
 ### doctor `[services]`
 Read-only diagnosis; exits non-zero if anything is **FAIL**. Service-specific checks
-are scoped to the requested services; global checks (`apachectl configtest`,
-running-vs-on-disk interpreter state, a stray legacy `trac.conf`) always run.
+are scoped to the requested services; global checks always run: `apachectl
+configtest`, running-vs-on-disk interpreter state, a stray legacy `trac.conf`, the
+service-control mechanism (systemd vs `httpd -k`), presence of the `/run/httpd`
+runtime dir on non-systemd hosts, and whether httpd is actually **active**.
 
 ### repair `[services]`
 Diagnose, then re-assert the requested (configured) services — fixing missing

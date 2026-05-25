@@ -620,6 +620,16 @@ def _httpd_running():
     return subprocess.run(["pgrep", "-x", "httpd"], stdout=subprocess.DEVNULL).returncode == 0
 
 
+def ensure_httpd_runtime_dir():
+    """httpd needs /run/httpd (pid, lock, scoreboard socket).  On systemd hosts
+    systemd-tmpfiles (tmpfiles.d/httpd.conf) and the unit's RuntimeDirectory=
+    create it; without systemd -- a container/chroot, or simply before tmpfiles
+    has run -- it's absent and `httpd -k start` dies with 'AH00015: Unable to
+    open logs' / 'no listening sockets'.  Create it the way tmpfiles.d does
+    (0710 root:apache).  makedir() is idempotent, so this is a no-op when present."""
+    makedir("/run/httpd", 0o710, owner="root", group="apache")
+
+
 def apache_apply(restart):
     """Restart/reload httpd via systemd when it's the init, else drive the httpd
     binary directly with -k (so the same code path works in a container/chroot
@@ -628,7 +638,9 @@ def apache_apply(restart):
     fails when systemd isn't running; `httpd -k <verb>` talks to httpd directly."""
     if _systemd():
         run(["systemctl", "restart" if restart else "reload", "httpd"])
-    elif not _httpd_running():
+        return
+    ensure_httpd_runtime_dir()       # systemd-tmpfiles isn't around to make it
+    if not _httpd_running():
         run(["httpd", "-k", "start"])
     else:
         run(["httpd", "-k", "restart" if restart else "graceful"])
@@ -650,6 +662,8 @@ def apply_changes():
                     or running_has_so("mod_python") != _ondisk_module("python_module"))
     if CTX.dry:
         log("[dry-run] apachectl configtest")
+        if not _systemd() and not os.path.isdir("/run/httpd"):
+            log("[dry-run] mkdir /run/httpd (0710 root:apache) -- no systemd-tmpfiles")
         log("[dry-run] would " + ("restart httpd" if need_restart else
             ("reload httpd" if CTX.config_changed else "do nothing (no changes)")))
         return
@@ -886,6 +900,20 @@ def doctor():
                          stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
     last = (out.strip().splitlines() or ["(no output)"])[-1]
     _chk(r, "OK" if "Syntax OK" in out else "FAIL", "apachectl configtest: " + last)
+
+    # Service control + runtime state.  On EL8 `apachectl start/restart/graceful`
+    # always defers to systemctl, so hzforge uses systemd when it's the init and
+    # otherwise drives `httpd -k` directly -- which needs /run/httpd, normally made
+    # by systemd-tmpfiles.  Surface both, plus whether httpd is actually up.
+    if _systemd():
+        _chk(r, "INFO", "service control: systemd (systemctl restart/reload httpd)")
+    else:
+        _chk(r, "INFO", "service control: httpd -k (no systemd; apachectl would defer to systemctl)")
+        rd = os.path.isdir("/run/httpd")
+        _chk(r, "OK" if rd else "WARN",
+             "/run/httpd " + ("present" if rd else "MISSING -> httpd -k start would fail (repair)"))
+    active = apache_active()
+    _chk(r, "OK" if active == "active" else "WARN", "httpd: " + active)
 
     if "trac" in target:
         if handler == "mod_wsgi":

@@ -98,7 +98,10 @@ Common: `--hub <name>` (auto-detected), `--dry-run`, `--no-restart`.
   TracUriRoot`.
 - **Restart vs reload** is decided by comparing the running httpd's loaded modules
   (`/proc/<pid>/maps`) against what's enabled on disk; full restart only when the
-  interpreter set must change.
+  interpreter set must change. With systemd it uses `systemctl`; without it (a
+  container/chroot) it drives `httpd -k` directly — EL8's `apachectl` always defers
+  `start`/`restart`/`graceful` to systemctl — and first creates the `/run/httpd`
+  runtime dir that `systemd-tmpfiles` would otherwise provide.
 - **Trac ↔ Subversion are decoupled** &mdash; Trac runs without the repo browser;
   the browser is auto-enabled only when the svn service is installed.
 

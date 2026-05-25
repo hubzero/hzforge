@@ -54,8 +54,9 @@ jobs:
             python2 python2-pip python2-devel gcc redhat-rpm-config \
             procps-ng which findutils
 
-      - name: Runtime dirs (no systemd-tmpfiles in a container)
-        run: mkdir -p /run/httpd && chown apache:apache /run/httpd
+      # NOTE: /run/httpd is intentionally NOT created here -- hzforge's
+      # ensure_httpd_runtime_dir() must make it itself on a non-systemd host.
+      # Creating it here would mask a regression in that path.
 
       - name: Self-signed localhost cert for stock ssl.conf
         # mod_ssl ships /etc/httpd/conf.d/ssl.conf referencing localhost.crt/.key;
