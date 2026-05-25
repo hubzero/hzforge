@@ -621,14 +621,17 @@ def _httpd_running():
 
 
 def apache_apply(restart):
-    """Restart/reload httpd via systemd when it's the init, else apachectl (so the
-    same code path works in a container/chroot without systemd)."""
+    """Restart/reload httpd via systemd when it's the init, else drive the httpd
+    binary directly with -k (so the same code path works in a container/chroot
+    without systemd).  We bypass `apachectl start|restart|graceful` here because
+    EL8's apachectl delegates those verbs to systemctl unconditionally, which
+    fails when systemd isn't running; `httpd -k <verb>` talks to httpd directly."""
     if _systemd():
         run(["systemctl", "restart" if restart else "reload", "httpd"])
     elif not _httpd_running():
-        run(["apachectl", "start"])
+        run(["httpd", "-k", "start"])
     else:
-        run(["apachectl", "restart" if restart else "graceful"])
+        run(["httpd", "-k", "restart" if restart else "graceful"])
 
 
 def apache_active():
