@@ -923,13 +923,16 @@ def detect_configured_services():
 
 
 def detect_handler():
-    """Trac handler currently wired (from the trac drop-in or a legacy trac.conf), else None."""
+    """Trac handler currently wired (from the trac drop-in or a legacy trac.conf), else None.
+    Match markers that are present even before any env exists: the mod_python drop-in always
+    carries `PythonOption` (egg cache), the mod_wsgi one always `WSGIScriptAliasMatch`.
+    `modpython_frontend` only appears once there are per-env <Location> blocks."""
     for p in (dropin_path("trac"), os.path.join(ARGS.include_dir, "trac.conf")):
         if os.path.exists(p):
             with open(p) as fh:
                 t = fh.read()
-            if "modpython_frontend" in t:   return "mod_python"
-            if "WSGIScriptAliasMatch" in t: return "mod_wsgi"
+            if "WSGIScriptAliasMatch" in t:                      return "mod_wsgi"
+            if "modpython_frontend" in t or "PythonOption" in t: return "mod_python"
     return None
 
 
