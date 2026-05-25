@@ -86,7 +86,8 @@ httpd.</li>
 </ul>
 <h2 id="python">Python</h2>
 <ul>
-<li><strong>Python 3.8+</strong> to run <code>hzforge.py</code> itself.</li>
+<li><strong>Python 3.6+</strong> to run <code>hzforge.py</code> itself — it targets RHEL 8's stock <code>python3</code>
+(3.6), so it uses f-strings but avoids 3.7+ APIs.</li>
 <li><strong>Python 2.7</strong> for the Trac stack it manages — the HUBzero Trac plugins and, for the
 mod_wsgi handler, the pip-built <code>Trac</code> and <code>mod_wsgi==4.9.4</code> (the last
 Python-2-capable mod_wsgi release).</li>

@@ -13,7 +13,8 @@ as **root** (`sudo`).
 
 ## Python
 
-- **Python 3.8+** to run `hzforge.py` itself.
+- **Python 3.6+** to run `hzforge.py` itself — it targets RHEL 8's stock `python3`
+  (3.6), so it uses f-strings but avoids 3.7+ APIs.
 - **Python 2.7** for the Trac stack it manages — the HUBzero Trac plugins and, for the
   mod_wsgi handler, the pip-built `Trac` and `mod_wsgi==4.9.4` (the last
   Python-2-capable mod_wsgi release).

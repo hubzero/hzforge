@@ -22,7 +22,9 @@ protected from the per-directory CMS rewrite by vhost-scope `RewriteRule ... [EN
 rules in the drop-in; git/gitExternal (ScriptAliasMatch) and mod_wsgi-trac
 (WSGIScriptAliasMatch) self-divert at the translate-name phase.
 
-Run as root.  Services are positional; preview any command with --dry-run:
+Requires Python 3.6+ (uses f-strings; deliberately avoids 3.7+ APIs so it runs on
+RHEL 8's stock python3, 3.6).  Run as root.  Services are positional; preview any
+command with --dry-run:
   hzforge install trac                       # trac only (mod_wsgi)
   hzforge install                            # no services = all
   hzforge install svn git gitExternal trac

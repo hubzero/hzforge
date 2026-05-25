@@ -13,7 +13,7 @@
   <a href="https://github.com/hubzero/hzforge/actions/workflows/integration.yml"><img alt="integration (EL8)" src="https://github.com/hubzero/hzforge/actions/workflows/integration.yml/badge.svg"></a>
   <a href="https://github.com/hubzero/hzforge/actions/workflows/docs.yml"><img alt="docs CI" src="https://github.com/hubzero/hzforge/actions/workflows/docs.yml/badge.svg"></a>
   <a href="https://hubzero.github.io/hzforge/"><img alt="documentation" src="https://img.shields.io/badge/docs-hubzero.github.io%2Fhzforge-2456c2?logo=github&logoColor=white"></a>
-  <img alt="Python 3.8+" src="https://img.shields.io/badge/python-3.8%2B-3776ab?logo=python&logoColor=white">
+  <img alt="Python 3.6+" src="https://img.shields.io/badge/python-3.6%2B-3776ab?logo=python&logoColor=white">
   <a href="LICENSE.md"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-007ec6"></a>
   <img alt="status: beta" src="https://img.shields.io/badge/status-beta-d54a3c">
 </p>
@@ -111,8 +111,8 @@ the full picture.
 
 ## Requirements
 
-- Rocky/RHEL 8, Apache 2.4, Python 2.7 (for the Trac stack) and Python 3.8+ (to run
-  hzforge). Run as root.
+- Rocky/RHEL 8, Apache 2.4, Python 2.7 (for the Trac stack) and Python 3.6+ (to run
+  hzforge — it targets RHEL 8's stock `python3`, 3.6). Run as root.
 - The `hubzero` yum repo (`hubzero-trac`, `hubzero-trac-mysqlauthz`,
   `subversion-python`); for `--svn-source wandisco`, access to
   `opensource.wandisco.com`; for the mod_wsgi handler, PyPI access.
