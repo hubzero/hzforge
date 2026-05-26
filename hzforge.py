@@ -745,8 +745,8 @@ def apply_changes():
     if "Syntax OK" not in out:
         die("configtest failed -- running server untouched. Fix and re-run.")
     if ARGS.no_restart:
-        warn("--no-restart: staged but not applied; %s httpd to activate."
-             % ("restart" if need_restart else "reload"))
+        warn(f"--no-restart: staged but not applied; {'restart' if need_restart else 'reload'} "
+             "httpd to activate.")
         return
     if need_restart:
         log("interpreter module set changed -> full restart")
@@ -1145,8 +1145,9 @@ def doctor():
 
     if "trac" in target:
         if handler == "mod_wsgi":
-            _chk(r, "OK" if os.path.exists(SHIM_PATH) else "FAIL",
-                 "shim %s" % ("present" if os.path.exists(SHIM_PATH) else "MISSING (repair)"))
+            shim = os.path.exists(SHIM_PATH)
+            _chk(r, "OK" if shim else "FAIL",
+                 f"shim {'present' if shim else 'MISSING (repair)'}")
         ti = subprocess.run(["runuser", "-u", "apache", "--", "python2", "-c", "import trac"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, universal_newlines=True)
         if ti.returncode == 0:
@@ -1164,25 +1165,28 @@ def doctor():
                  "Trac repo browser (svn.core) " + ("available" if sc.returncode == 0
                  else "unavailable -> install subversion-python"))
     if "svn" in target:
-        _chk(r, "OK" if rpm_installed("mod_dav_svn") else "FAIL",
-             "mod_dav_svn " + ("installed" if rpm_installed("mod_dav_svn") else "MISSING"))
+        dav = rpm_installed("mod_dav_svn")
+        _chk(r, "OK" if dav else "FAIL", "mod_dav_svn " + ("installed" if dav else "MISSING"))
         f = os.path.join(inc, "svn", "svn.conf")
-        state = "present" if os.path.exists(f) else "absent (generated externally)"
-        _chk(r, "OK" if os.path.exists(f) else "WARN", f"per-tool {f} {state}")
+        have = os.path.exists(f)
+        state = "present" if have else "absent (generated externally)"
+        _chk(r, "OK" if have else "WARN", f"per-tool {f} {state}")
     if "git" in target or "gitExternal" in target:
-        _chk(r, "OK" if rpm_installed("git") else "FAIL",
-             "git " + ("installed" if rpm_installed("git") else "MISSING"))
+        have_git = rpm_installed("git")
+        _chk(r, "OK" if have_git else "FAIL", "git " + ("installed" if have_git else "MISSING"))
         for svc, fn in (("git", "git.conf"), ("gitExternal", "gitExternal.conf")):
             if svc in target:
                 f = os.path.join(inc, "git", fn)
-                state = "present" if os.path.exists(f) else "absent (generated externally)"
-                _chk(r, "OK" if os.path.exists(f) else "WARN", f"per-tool {f} {state}")
+                have = os.path.exists(f)
+                state = "present" if have else "absent (generated externally)"
+                _chk(r, "OK" if have else "WARN", f"per-tool {f} {state}")
     for key, svc in (("trac_tools", "trac"), ("svn_tools", "svn"),
                      ("git_tools", "git"), ("gext_tools", "gitExternal")):
         if svc in target:
             path = OPT[key][0]
-            state = "exists" if os.path.isdir(path) else "MISSING (repair)"
-            _chk(r, "OK" if os.path.isdir(path) else "WARN", f"{path} {state}")
+            have = os.path.isdir(path)
+            state = "exists" if have else "MISSING (repair)"
+            _chk(r, "OK" if have else "WARN", f"{path} {state}")
 
     fails = sum(1 for lvl, _ in r if lvl == "FAIL")
     warns = sum(1 for lvl, _ in r if lvl == "WARN")
