@@ -166,3 +166,16 @@ def test_ldap_bindpw_inline_warns(monkeypatch):
     monkeypatch.setattr(hz, "ARGS", make_args(ldap_bindpw="pw"), raising=False)
     assert hz._ldap_bindpw() == "pw"
     assert any("process list" in n for n in hz.CTX.notes)
+
+
+@pytest.mark.parametrize("spec,expected", [
+    ("Trac==1.0.14",          "1.0.14"),
+    ("  Trac == 1.0.14  ",    "1.0.14"),    # whitespace tolerated
+    ("trac==1.0.14",          "1.0.14"),    # case-insensitive
+    ("Trac>=1.0,<1.1",        None),         # range -> no exact version
+    ("Trac",                  None),         # bare name
+    ("Trac==1.0.14,<1.1",     None),         # not a pure pin
+])
+def test_trac_spec_exact_version(spec, expected, monkeypatch):
+    monkeypatch.setattr(hz, "ARGS", make_args(trac_spec=spec), raising=False)
+    assert hz._trac_spec_exact_version() == expected

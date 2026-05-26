@@ -416,12 +416,36 @@ def setup_trac():
         _trac_modpython()
 
 
+def _trac_spec_exact_version():
+    """If --trac-spec is an exact pin (`Trac==X.Y.Z`), return the version; else None
+    (e.g. for a range like `Trac>=1.0,<1.1`, no exact version to enforce)."""
+    m = re.match(r"^\s*Trac\s*==\s*([^\s,]+)\s*$", ARGS.trac_spec, re.I)
+    return m.group(1) if m else None
+
+
+def _trac_installed_version():
+    """pip2's view of the installed Trac dist version, or None if pip2/Trac absent.
+    Note: this is the pip dist version, which is what `Trac==X.Y.Z` pins -- the
+    quirky `trac.__version__` (frozen at 1.0.13 across 1.0.x dists) is not used."""
+    m = re.search(r"^Version:\s*(\S+)", _out(["pip2", "show", "Trac"]), re.M)
+    return m.group(1) if m else None
+
+
 def _ensure_trac_installed():
-    """pip-install Trac unless it already imports (or --force-pip)."""
-    if py2_can_import("trac") and not ARGS.force_pip:
-        log("Trac importable (skip pip; --force-pip to reinstall)")
-    else:
-        pip_install(ARGS.trac_spec)
+    """pip-install Trac unless it already imports at the pinned version
+    (or --force-pip is set). When --trac-spec is an exact pin and the
+    installed dist differs, reinstall so doctor/repair/install converge."""
+    if not ARGS.force_pip and py2_can_import("trac"):
+        want = _trac_spec_exact_version()
+        if not want:
+            log("Trac importable (skip pip; --force-pip to reinstall)")
+            return
+        have = _trac_installed_version()
+        if have == want:
+            log(f"Trac importable ({have}) (skip pip; --force-pip to reinstall)")
+            return
+        log(f"Trac {have or '?'} installed but pin is {want} -- reinstalling")
+    pip_install(ARGS.trac_spec)
 
 
 def _trac_modwsgi():
@@ -1189,6 +1213,17 @@ def doctor():
             perm = "Permission denied" in (ti.stderr or "")
             _chk(r, "FAIL", f"apache cannot import Trac{' [umask perms]' if perm else ''} "
                             f"(repair: {'fix-perms' if perm else 'reinstall Trac'})")
+        pinned = _trac_spec_exact_version()
+        have = _trac_installed_version()
+        if pinned:
+            if have is None:
+                _chk(r, "WARN", f"Trac version: not pip-installed (pin: {pinned})")
+            elif have == pinned:
+                _chk(r, "OK", f"Trac version: {have} (matches pin)")
+            else:
+                _chk(r, "FAIL", f"Trac version: {have} != pin {pinned} (repair to reinstall)")
+        elif have:
+            _chk(r, "INFO", f"Trac version: {have} (spec: {ARGS.trac_spec})")
         # Trac's repo browser is optional -- only relevant when the svn service is
         # configured (it pulls subversion-python). Trac-without-svn is a valid config.
         if "svn" in services:
