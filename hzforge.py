@@ -121,10 +121,11 @@ PAT = re.compile(r'^(/tools/([^/]+))(/.*)?$')
 def application(environ, start_response):
     full = environ.get('SCRIPT_NAME', '') + environ.get('PATH_INFO', '')
     m = PAT.match(full)
-    if not m or not os.path.isdir(os.path.join(TOOLS, m.group(2))):
+    name = m.group(2) if m else ''
+    if not m or name in ('.', '..') or not os.path.isdir(os.path.join(TOOLS, name)):
         start_response('404 Not Found', [('Content-Type', 'text/plain')])
         return ['No such Trac environment\\n']
-    environ['trac.env_path'] = os.path.join(TOOLS, m.group(2))
+    environ['trac.env_path'] = os.path.join(TOOLS, name)
     environ['SCRIPT_NAME'] = m.group(1)
     environ['PATH_INFO'] = m.group(3) or '/'
     return dispatch_request(environ, start_response)
@@ -164,9 +165,12 @@ def run(cmd, check=True, capture=False, mutating=True):
         log("[dry-run] " + pretty)
         return ""
     log("$ " + pretty)
-    res = subprocess.run(cmd, stdout=subprocess.PIPE if capture else None,
-                         stderr=subprocess.STDOUT if capture else None,
-                         universal_newlines=True)
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE if capture else None,
+                             stderr=subprocess.STDOUT if capture else None,
+                             universal_newlines=True)
+    except FileNotFoundError:
+        die(f"command not found: {cmd[0]}")
     if check and res.returncode != 0:
         if capture and res.stdout:
             print(res.stdout)
@@ -202,12 +206,26 @@ def running_has_so(soname):
     return False
 
 
+def _uid(owner):
+    try:
+        return pwd.getpwnam(owner).pw_uid
+    except KeyError:
+        die(f"user '{owner}' not found -- is httpd installed?")
+
+
+def _gid(group):
+    try:
+        return grp.getgrnam(group).gr_gid
+    except KeyError:
+        die(f"group '{group}' not found -- is httpd installed?")
+
+
 def makedir(path, mode, owner="apache", group="apache"):
     if os.path.isdir(path):
         st = os.stat(path)
         if (stat.S_IMODE(st.st_mode) == mode and
-                st.st_uid == pwd.getpwnam(owner).pw_uid and
-                st.st_gid == grp.getgrnam(group).gr_gid):
+                st.st_uid == _uid(owner) and
+                st.st_gid == _gid(group)):
             return
     if CTX.dry:
         log(f"[dry-run] mkdir {path} (mode {mode:o}, {owner}:{group})")
@@ -215,7 +233,7 @@ def makedir(path, mode, owner="apache", group="apache"):
     if not os.path.isdir(path):
         os.makedirs(path)
     os.chmod(path, mode)
-    os.chown(path, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+    os.chown(path, _uid(owner), _gid(group))
     log(f"dir: {path} ({mode:o} {owner}:{group})")
 
 
@@ -228,8 +246,8 @@ def write_file(path, content, mode, owner="root", group="root"):
     if ok:
         st = os.stat(path)
         ok = (stat.S_IMODE(st.st_mode) == mode and
-              st.st_uid == pwd.getpwnam(owner).pw_uid and
-              st.st_gid == grp.getgrnam(group).gr_gid)
+              st.st_uid == _uid(owner) and
+              st.st_gid == _gid(group))
     if ok:
         log("unchanged: " + path)
         return False
@@ -244,7 +262,7 @@ def write_file(path, content, mode, owner="root", group="root"):
         fh.write(content)
     os.replace(tmp, path)
     os.chmod(path, mode)
-    os.chown(path, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+    os.chown(path, _uid(owner), _gid(group))
     log("wrote: " + path)
     return True
 
@@ -266,6 +284,15 @@ def dnf_install(pkgs, enablerepo=None):
         cmd += ["--enablerepo=" + enablerepo]
     cmd += ["install"] + pkgs
     run(cmd)
+
+
+def pip_install(spec):
+    """Always run pip behind `umask 022` so the files root installs stay
+    world-readable -- apache must be able to import them (root's default umask
+    0077 would make them unreadable, breaking Trac under mod_wsgi). The spec is
+    passed as a shell argument ($1), never interpolated into the command string,
+    so it can't break out and inject commands."""
+    run(["sh", "-c", 'umask 022; exec pip2 install "$1"', "sh", spec])
 
 
 def ensure_wandisco_repo():
@@ -376,13 +403,12 @@ def setup_trac():
 
 
 def _trac_modwsgi():
-    os.umask(0o022)  # so root-built pip files are readable by apache
     if py2_can_import("trac") and not ARGS.force_pip:
         log("Trac importable (skip pip; --force-pip to reinstall)")
     else:
-        run(["sh", "-c", f"umask 022; pip2 install '{ARGS.trac_spec}'"])
+        pip_install(ARGS.trac_spec)
     if not os.path.exists(_modwsgi_so()) and not py2_can_import("mod_wsgi"):
-        run(["sh", "-c", f"umask 022; pip2 install '{ARGS.modwsgi_spec}'"])
+        pip_install(ARGS.modwsgi_spec)
     else:
         log("mod_wsgi present (skip pip)")
     # shim
@@ -398,11 +424,10 @@ def _trac_modpython():
     # mod_python serves Trac in-process; ensure Trac is importable, the module is loaded,
     # and mod_wsgi isn't.  mod_python comes from the hubzero (julian-el8) repo, built for
     # the Python 2.7 it embeds.
-    os.umask(0o022)  # so root-built pip files are readable by apache
     if py2_can_import("trac") and not ARGS.force_pip:
         log("Trac importable (skip pip; --force-pip to reinstall)")
     else:
-        run(["sh", "-c", f"umask 022; pip2 install '{ARGS.trac_spec}'"])
+        pip_install(ARGS.trac_spec)
     if not rpm_installed("mod_python"):
         dnf_install(["mod_python"])
     makedir(EGG_CACHE, 0o755)
@@ -901,9 +926,9 @@ def cmd_test():
             env = os.path.join(OPT["trac_tools"][0], name)
             if os.path.exists(env):
                 die(f"test path already exists: {env}")
+            created.append(env)   # register before creating so cleanup covers a partial create
             run(["trac-admin", env, "initenv", name, "sqlite:db/trac.db"], capture=True)
             run(["chown", "-R", "apache:apache", env])
-            created.append(env)
             # mod_wsgi is served by hzforge's generic route; mod_python needs a per-env <Location>
             if handler == "mod_python":
                 route_lines += _trac_modpython_route(name, env)
@@ -912,9 +937,9 @@ def cmd_test():
             repo = os.path.join(OPT["svn_tools"][0], name)
             if os.path.exists(repo):
                 die(f"test path already exists: {repo}")
+            created.append(repo)   # register before creating so cleanup covers a partial create
             run(["svnadmin", "create", repo], capture=True)
             run(["chown", "-R", "apache:apache", repo])
-            created.append(repo)
             route_lines += _svn_route(name, repo)
             routed = True
         for gsvc, key in (("git", "git_tools"), ("gitExternal", "gext_tools")):
@@ -926,9 +951,9 @@ def cmd_test():
                 repo = os.path.join(root, reponame)
                 if os.path.exists(repo):
                     die(f"test path already exists: {repo}")
+                created.append(repo)   # register before creating so cleanup covers a partial create
                 run(["git", "init", "--bare", "-q", repo], capture=True)
                 run(["chown", "-R", "apache:apache", repo])
-                created.append(repo)
                 route_lines += _git_route(gsvc, name, root, reponame)
                 routed = True
         if routed:
