@@ -82,7 +82,7 @@ of `install` (skip with `--no-test`).
 |---|---|---|
 | `--trac-handler {mod_wsgi,mod_python}` | `mod_wsgi` | Exactly one interpreter is loaded. |
 | `--svn-source {wandisco,appstream}` | `wandisco` | `subversion`+`mod_dav_svn` source; `subversion-python` always from hubzero. |
-| `--trac-spec` | `Trac>=1.0,<1.1` | pip spec matching env DB schema (no upgrade). |
+| `--trac-spec` | `Trac==1.0.14` | pinned pip spec; 1.0.x is the DB schema 26 line (matches envs, no upgrade). |
 | `--modwsgi-spec` | `mod_wsgi==4.9.4` | last Python-2-capable mod_wsgi. |
 | `--ldap-url` / `--ldap-binddn` / `--ldap-bindpw` | auto-detect | for the Trac `/login` auth block; read from the existing `svn.conf` if not given. |
 | `--ldap-bindpw-file` | — | read the bind password from a root-only file instead of `--ldap-bindpw` (which is visible in the process list). |

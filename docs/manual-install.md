@@ -104,7 +104,7 @@ dnf -y install hubzero-trac
 # Trac + mod_wsgi from PyPI. umask 022 so root-built files are world-readable
 # (apache must import them); the default umask 0077 would make Trac return 500.
 umask 022
-pip2 install 'Trac>=1.0,<1.1'        # match envs at DB schema 26 (no upgrade)
+pip2 install 'Trac==1.0.14'          # pinned; 1.0.x is DB schema 26 (matches envs, no upgrade)
 pip2 install 'mod_wsgi==4.9.4'       # last Python-2-capable mod_wsgi
 ```
 
@@ -300,7 +300,7 @@ dnf -y module enable subversion:1.10      # (or set up the WanDisco repo as in A
 dnf -y install hubzero-trac
 
 umask 022
-pip2 install 'Trac>=1.0,<1.1'             # mod_python loads Trac from site-packages
+pip2 install 'Trac==1.0.14'               # mod_python loads Trac from site-packages
 
 # mod_python comes from the hubzero (julian-el8) repo, built for the Python 2.7 it embeds
 dnf -y install mod_python

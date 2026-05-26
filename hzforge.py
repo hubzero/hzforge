@@ -50,7 +50,7 @@ import tempfile
 # ---------------------------------------------------------------------------- #
 # Defaults
 # ---------------------------------------------------------------------------- #
-TRAC_SPEC     = "Trac>=1.0,<1.1"     # match envs at DB schema 26 (no upgrade)
+TRAC_SPEC     = "Trac==1.0.14"       # pinned; 1.0.x is DB schema 26 (matches envs, no upgrade)
 MODWSGI_SPEC  = "mod_wsgi==4.9.4"    # last Python-2-capable mod_wsgi release
 ALL_SERVICES  = ["svn", "git", "gitExternal", "trac"]
 
