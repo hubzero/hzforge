@@ -85,6 +85,7 @@ of `install` (skip with `--no-test`).
 | `--trac-spec` | `Trac>=1.0,<1.1` | pip spec matching env DB schema (no upgrade). |
 | `--modwsgi-spec` | `mod_wsgi==4.9.4` | last Python-2-capable mod_wsgi. |
 | `--ldap-url` / `--ldap-binddn` / `--ldap-bindpw` | auto-detect | for the Trac `/login` auth block; read from the existing `svn.conf` if not given. |
+| `--ldap-bindpw-file` | — | read the bind password from a root-only file instead of `--ldap-bindpw` (which is visible in the process list). |
 | `--force-pip` | off | reinstall Trac even if importable. |
 
 Common to all commands: `--hub <name>` (auto-detected from `sites.d`),

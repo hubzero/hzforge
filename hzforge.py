@@ -59,15 +59,16 @@ ALL_SERVICES  = ["svn", "git", "gitExternal", "trac"]
 # args, and main() backfills the same attrs onto the other subcommands
 # (uninstall/doctor/repair/test read them too).
 INSTALL_DEFAULTS = {
-    "trac_handler": "mod_wsgi",
-    "svn_source":   "wandisco",
-    "trac_spec":    TRAC_SPEC,
-    "modwsgi_spec": MODWSGI_SPEC,
-    "ldap_url":     None,
-    "ldap_binddn":  None,
-    "ldap_bindpw":  None,
-    "force_pip":    False,
-    "no_test":      False,
+    "trac_handler":     "mod_wsgi",
+    "svn_source":       "wandisco",
+    "trac_spec":        TRAC_SPEC,
+    "modwsgi_spec":     MODWSGI_SPEC,
+    "ldap_url":         None,
+    "ldap_binddn":      None,
+    "ldap_bindpw":      None,
+    "ldap_bindpw_file": None,
+    "force_pip":        False,
+    "no_test":          False,
 }
 
 OPT = {
@@ -572,10 +573,32 @@ def _trac_envs():
                   if os.path.exists(os.path.join(base, d, "conf", "trac.ini")))
 
 
+def _ldap_bindpw():
+    """Resolve the LDAP bind password: a --ldap-bindpw-file (read root-only)
+    is preferred over an inline --ldap-bindpw (which leaks via the process
+    list); fall back to harvesting it from the existing conf."""
+    if ARGS.ldap_bindpw_file:
+        path = ARGS.ldap_bindpw_file
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            with open(path) as fh:
+                pw = fh.read().strip()
+        except OSError as e:
+            die(f"--ldap-bindpw-file: cannot read {path}: {e}")
+        if mode & 0o077:
+            warn(f"{path} is group/other-accessible (mode {mode:o}); chmod 600 it")
+        return pw
+    if ARGS.ldap_bindpw:
+        warn("--ldap-bindpw exposes the password in the process list; "
+             "prefer --ldap-bindpw-file")
+        return ARGS.ldap_bindpw
+    return _grep_conf("AuthLDAPBindPassword")
+
+
 def _auth_block():
     url    = ARGS.ldap_url    or _grep_conf("AuthLDAPURL")
     binddn = ARGS.ldap_binddn or _grep_conf("AuthLDAPBindDN")
-    bindpw = ARGS.ldap_bindpw or _grep_conf("AuthLDAPBindPassword")
+    bindpw = _ldap_bindpw()
     if not (url and binddn and bindpw):
         warn("LDAP /login auth not configured (no creds found); pass --ldap-* to enable it.")
         return ""
@@ -1250,7 +1273,11 @@ def build_parser():
     pi.add_argument("--modwsgi-spec", default=INSTALL_DEFAULTS["modwsgi_spec"], dest="modwsgi_spec")
     pi.add_argument("--ldap-url", dest="ldap_url")
     pi.add_argument("--ldap-binddn", dest="ldap_binddn")
-    pi.add_argument("--ldap-bindpw", dest="ldap_bindpw")
+    pi.add_argument("--ldap-bindpw", dest="ldap_bindpw",
+                    help="LDAP bind password (exposed in the process list; "
+                         "prefer --ldap-bindpw-file)")
+    pi.add_argument("--ldap-bindpw-file", dest="ldap_bindpw_file",
+                    help="read the LDAP bind password from this root-only file")
     pi.add_argument("--force-pip", action="store_true")
     pi.add_argument("--no-test", action="store_true",
                     help="skip the post-install Trac self-test")

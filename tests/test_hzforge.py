@@ -28,7 +28,7 @@ def make_args(**kw):
     a = types.SimpleNamespace(
         include_dir="/etc/httpd/help.conf.d",
         trac_handler="mod_wsgi",
-        ldap_url=None, ldap_binddn=None, ldap_bindpw=None,
+        ldap_url=None, ldap_binddn=None, ldap_bindpw=None, ldap_bindpw_file=None,
         services=[],
     )
     for k, v in kw.items():
@@ -137,3 +137,32 @@ def test_other_can_read_dir(tmp_path):
     assert hz._other_can_read(str(d)) is False
     os.chmod(str(d), 0o755)
     assert hz._other_can_read(str(d)) is True
+
+
+def test_ldap_bindpw_file_wins_and_strips(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    f = tmp_path / "pw"
+    f.write_text("s3cret\n")
+    os.chmod(str(f), 0o600)
+    # inline also set: the file must take precedence
+    monkeypatch.setattr(hz, "ARGS",
+                        make_args(ldap_bindpw="inline", ldap_bindpw_file=str(f)), raising=False)
+    assert hz._ldap_bindpw() == "s3cret"      # trailing newline stripped, file wins
+    assert hz.CTX.notes == []                 # 0600 -> no perms warning
+
+
+def test_ldap_bindpw_file_loose_perms_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    f = tmp_path / "pw"
+    f.write_text("s3cret")
+    os.chmod(str(f), 0o644)
+    monkeypatch.setattr(hz, "ARGS", make_args(ldap_bindpw_file=str(f)), raising=False)
+    hz._ldap_bindpw()
+    assert any("chmod 600" in n for n in hz.CTX.notes)
+
+
+def test_ldap_bindpw_inline_warns(monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "ARGS", make_args(ldap_bindpw="pw"), raising=False)
+    assert hz._ldap_bindpw() == "pw"
+    assert any("process list" in n for n in hz.CTX.notes)

@@ -84,6 +84,7 @@ sudo python3 hzforge.py repair                  # fix drift
 | `--trac-handler {mod_wsgi,mod_python}` | `mod_wsgi` | Exactly one interpreter is loaded. |
 | `--svn-source {wandisco,appstream}` | `wandisco` | `subversion`+`mod_dav_svn` source; `subversion-python` always from hubzero. |
 | `--ldap-url/--ldap-binddn/--ldap-bindpw` | auto-detect | Trac `/login` auth; read from `svn.conf` if omitted. |
+| `--ldap-bindpw-file` | — | Read the bind password from a root-only file (avoids exposing it in the process list). |
 | `--force-pip` | off | Reinstall Trac even if importable. |
 
 Common: `--hub <name>` (auto-detected), `--dry-run`, `--no-restart`.
