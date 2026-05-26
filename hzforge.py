@@ -179,24 +179,39 @@ def run(cmd, check=True, capture=False, mutating=True):
     return (res.stdout or "") if capture else ""
 
 
+def _ok(cmd):
+    """True iff <cmd> runs and exits 0; False if it fails or its binary is absent."""
+    try:
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _out(cmd):
+    """stdout of <cmd> (stderr discarded), or '' if it fails or its binary is absent."""
+    try:
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              universal_newlines=True).stdout or ""
+    except FileNotFoundError:
+        return ""
+
+
 def rpm_installed(pkg):
-    return subprocess.run(["rpm", "-q", pkg], stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL).returncode == 0
+    return _ok(["rpm", "-q", pkg])
 
 
 def group_exists(g):
-    return subprocess.run(["getent", "group", g], stdout=subprocess.DEVNULL).returncode == 0
+    return _ok(["getent", "group", g])
 
 
 def py2_can_import(mod):
-    return subprocess.run(["python2", "-c", f"import {mod}"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    return _ok(["python2", "-c", f"import {mod}"])
 
 
 def running_has_so(soname):
     """Is <soname> mapped into the RUNNING httpd? (decides restart vs reload)."""
-    pids = subprocess.run(["pgrep", "-x", "httpd"], stdout=subprocess.PIPE,
-                          universal_newlines=True).stdout.split()
+    pids = _out(["pgrep", "-x", "httpd"]).split()
     for pid in pids:
         try:
             with open(f"/proc/{pid}/maps") as fh:
@@ -306,9 +321,7 @@ def _svn_repo():
 
 def _svn_module_stream():
     """The currently-enabled subversion module stream, or None."""
-    out = subprocess.run(["dnf", "-q", "module", "list", "--enabled", "subversion"],
-                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         universal_newlines=True).stdout or ""
+    out = _out(["dnf", "-q", "module", "list", "--enabled", "subversion"])
     m = re.search(r"^subversion\s+(\S+)", out, re.M)
     return m.group(1) if m else None
 
@@ -403,11 +416,16 @@ def setup_trac():
         _trac_modpython()
 
 
-def _trac_modwsgi():
+def _ensure_trac_installed():
+    """pip-install Trac unless it already imports (or --force-pip)."""
     if py2_can_import("trac") and not ARGS.force_pip:
         log("Trac importable (skip pip; --force-pip to reinstall)")
     else:
         pip_install(ARGS.trac_spec)
+
+
+def _trac_modwsgi():
+    _ensure_trac_installed()
     if not os.path.exists(_modwsgi_so()) and not py2_can_import("mod_wsgi"):
         pip_install(ARGS.modwsgi_spec)
     else:
@@ -425,10 +443,7 @@ def _trac_modpython():
     # mod_python serves Trac in-process; ensure Trac is importable, the module is loaded,
     # and mod_wsgi isn't.  mod_python comes from the hubzero (julian-el8) repo, built for
     # the Python 2.7 it embeds.
-    if py2_can_import("trac") and not ARGS.force_pip:
-        log("Trac importable (skip pip; --force-pip to reinstall)")
-    else:
-        pip_install(ARGS.trac_spec)
+    _ensure_trac_installed()
     if not rpm_installed("mod_python"):
         dnf_install(["mod_python"])
     makedir(EGG_CACHE, 0o755)
@@ -436,28 +451,24 @@ def _trac_modpython():
     _ensure_modwsgi_unloaded()
 
 
+def _modwsgi_module_config():
+    """`mod_wsgi-express module-config` output, or '' if not pip-installed yet
+    (fresh host / dry-run)."""
+    return _out(["mod_wsgi-express", "module-config"])
+
+
 def _modwsgi_so():
-    try:
-        out = subprocess.run(["mod_wsgi-express", "module-config"],
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                             universal_newlines=True).stdout or ""
-    except FileNotFoundError:
-        return ""                       # mod_wsgi not pip-installed yet (fresh host)
-    m = re.search(r'LoadModule\s+wsgi_module\s+"([^"]+)"', out)
+    m = re.search(r'LoadModule\s+wsgi_module\s+"([^"]+)"', _modwsgi_module_config())
     return m.group(1) if m else ""
 
 
 def _ensure_modwsgi_loaded():
-    try:
-        out = subprocess.run(["mod_wsgi-express", "module-config"], stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, universal_newlines=True).stdout or ""
-    except FileNotFoundError:
-        out = ""                        # not pip-installed yet (e.g. dry-run on a fresh host)
+    out = _modwsgi_module_config()
     load = next((l for l in out.splitlines() if l.startswith("LoadModule")),
                 'LoadModule wsgi_module "<run mod_wsgi-express module-config>"')
     home = next((l for l in out.splitlines() if l.startswith("WSGIPythonHome")),
                 'WSGIPythonHome "/usr"')
-    content = ("# Python2 mod_wsgi -- managed by setup_tool_services.py\n"
+    content = ("# Python2 mod_wsgi -- managed by hzforge\n"
                + load + "\n" + home + "\nWSGISocketPrefix run/wsgi\nWSGIRestrictEmbedded On\n")
     if write_file(MODCONF_WSGI, content, 0o644):
         _mark()
@@ -713,7 +724,7 @@ def _systemd():
 
 
 def _httpd_running():
-    return subprocess.run(["pgrep", "-x", "httpd"], stdout=subprocess.DEVNULL).returncode == 0
+    return _ok(["pgrep", "-x", "httpd"])
 
 
 def ensure_httpd_runtime_dir():
@@ -744,8 +755,7 @@ def apache_apply(restart):
 
 def apache_active():
     if _systemd():
-        return subprocess.run(["systemctl", "is-active", "httpd"], stdout=subprocess.PIPE,
-                              universal_newlines=True).stdout.strip()
+        return _out(["systemctl", "is-active", "httpd"]).strip()
     return "active" if _httpd_running() else "inactive"
 
 

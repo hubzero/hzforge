@@ -193,43 +193,40 @@ def discover_pages(docs_src: Path, groups: list[dict]) -> dict[str, list[dict]]:
 
 # --- link rewriting --------------------------------------------------------
 
-def make_link_rewriter(current_group: str, page_to_group: dict[str, str]):
-    """Return a function that rewrites .md links in markdown content.
+def resolve_md_link(href: str, page_to_group: dict[str, str]):
+    """Parse a flat intra-doc link `bar.md[#anchor]` to (group, slug, anchor),
+    or None if it isn't a rewritable doc link.
 
-    Source links use flat names (the docs/ dir has no subdirs):
-        bar.md          → page bar in some group
-        bar.md#anchor   → same, with anchor
-        ../tests/...    → repo-relative (kept as-is; broken in the
-                          rendered site, but the same string still
-                          points at the right thing on GitHub when the
-                          source file is viewed there)
-
-    Output URLs are pretty:
-        same group:    ../bar/
-        cross group:   ../../<group>/bar/
+    Not rewritten (returns None): external/anchor-only/mailto links; anything
+    that isn't a bare `*.md` filename — a path with a slash (e.g.
+    ../tests/legacy/README.md) is a repo path we can't resolve here; and links
+    to pages not claimed by any group. Shared by the doc-page and homepage
+    rewriters, which only differ in how they format the result.
     """
+    if not href or href.startswith(("http://", "https://", "#", "mailto:")):
+        return None
+    path, _, frag = href.partition("#")
+    anchor = "#" + frag if frag else ""
+    if not path.endswith(".md") or "/" in path:
+        return None
+    slug = path[:-3]
+    group = page_to_group.get(slug)
+    if group is None:
+        return None
+    return group, slug, anchor
+
+
+def make_link_rewriter(current_group: str, page_to_group: dict[str, str]):
+    """Rewrite .md links in a doc page to pretty URLs relative to that page:
+    same group → ../bar/, cross group → ../../<group>/bar/."""
     def rewrite(href: str) -> str:
-        if not href or href.startswith(("http://", "https://", "#", "mailto:")):
+        resolved = resolve_md_link(href, page_to_group)
+        if resolved is None:
             return href
-        anchor = ""
-        path = href
-        if "#" in path:
-            path, anchor = path.split("#", 1)
-            anchor = "#" + anchor
-        if not path.endswith(".md"):
-            return href
-        # Only rewrite if it's a bare filename (no slashes). Anything with
-        # a slash (e.g. ../tests/legacy/README.md) is a repo path we can't
-        # meaningfully resolve here — leave it alone.
-        if "/" in path:
-            return href
-        tgt_slug = path[:-3]
-        tgt_group = page_to_group.get(tgt_slug)
-        if tgt_group is None:
-            return href
-        if tgt_group == current_group:
-            return f"../{tgt_slug}/{anchor}"
-        return f"../../{tgt_group}/{tgt_slug}/{anchor}"
+        group, slug, anchor = resolved
+        if group == current_group:
+            return f"../{slug}/{anchor}"
+        return f"../../{group}/{slug}/{anchor}"
     return rewrite
 
 
@@ -360,20 +357,12 @@ def main() -> int:
     readme_path = DOCS_SRC / "README.md"
     if readme_path.exists():
         def readme_rewrite(href: str) -> str:
-            if not href or href.startswith(("http://", "https://", "#", "mailto:")):
+            # Homepage lives at the site root, so links are group/slug/ (no ../).
+            resolved = resolve_md_link(href, page_to_group)
+            if resolved is None:
                 return href
-            anchor = ""
-            path = href
-            if "#" in path:
-                path, anchor = path.split("#", 1)
-                anchor = "#" + anchor
-            # Same flat-name rewrite as the docs themselves: bar.md → group/bar/.
-            if path.endswith(".md") and "/" not in path:
-                tgt_slug = path[:-3]
-                tgt_group = page_to_group.get(tgt_slug)
-                if tgt_group is not None:
-                    return f"{tgt_group}/{tgt_slug}/{anchor}"
-            return href
+            group, slug, anchor = resolved
+            return f"{group}/{slug}/{anchor}"
         readme_text = readme_path.read_text(encoding="utf-8")
         readme_rendered = renderer.render(readme_text, link_rewrite=readme_rewrite)
         readme_html = (
@@ -423,14 +412,11 @@ def main() -> int:
             title = page_titles[(g_slug, page["slug"])]
             page_items.append(
                 '<li>\n'
-                '  <a href="{href}">\n'
-                '    <span class="group-pages__title">{title}</span>\n'
-                '    <span class="group-pages__slug">{slug}</span>\n'
+                f'  <a href="{escape(href)}">\n'
+                f'    <span class="group-pages__title">{escape(title)}</span>\n'
+                f'    <span class="group-pages__slug">{escape(page["slug"])}</span>\n'
                 '  </a>\n'
-                '</li>'.format(
-                    href=escape(href), title=escape(title),
-                    slug=escape(page["slug"]),
-                )
+                '</li>'
             )
         group_html = render_template(
             SOURCE_DIR / "templates" / "group.html",
