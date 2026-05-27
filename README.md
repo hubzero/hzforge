@@ -43,6 +43,7 @@ them and shields them from the CMS catch-all rewrite.
 ## Documentation
 
 Full docs: **<https://hubzero.github.io/hzforge/>** (sources under [`docs/`](docs/)).
+HUBzero Trac plugins being ported alongside hzforge live under [`plugins/`](plugins/).
 
 - [Summary](https://hubzero.github.io/hzforge/overview/summary/) &mdash; what it is, at a glance
 - [Motivations](https://hubzero.github.io/hzforge/overview/motivations/) &mdash; why it bypasses the m4 vhost
