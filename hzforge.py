@@ -1305,6 +1305,38 @@ def repair():
     doctor()
 
 
+def _upgrade_trac_env(env_path):
+    """STUB -- per-env Trac upgrade tasks (not yet implemented).
+
+    When this lands it will own bringing a single Trac env up to current
+    expectations.  Planned scope:
+
+      1. **Legacy macro cleanup.**  Remove the stale per-env macros at
+         `<env>/plugins/{image,link}.py` (forge dropped these into envs at
+         tool-create time; the universal `hubzero_macros` plugin replaces them
+         system-wide and the per-env copies become redundant once it is
+         pip-installed).
+      2. **Plugin installation/config verification.**  Confirm the expected
+         universal Trac plugins (`hubzeroplugin` from `hubzero-trac-mysqlauthz`,
+         `hubzero_macros`) are discoverable via `pkg_resources.iter_entry_points`
+         at the current pinned versions, and that `<env>/conf/trac.ini` does
+         not have stale `[components]` enable/disable lines pointing at removed
+         per-env modules.
+      3. **(Stage 2) DB schema walk** db29 -> db45 against the per-env SQLite
+         via a headless Py3 Trac 1.6 (`Environment(env_path).needs_upgrade()`
+         then `DatabaseManager(env).upgrade(45)`, then `WikiAdmin._do_upgrade()`),
+         with a `cp -a <env> <env>.bak-<ts>` backup beforehand.
+      4. **(Stage 2) Plugin quarantine across the schema walk** -- move
+         Py2-only eggs aside before Trac 1.6 boots over the env (component
+         discovery would otherwise crash on `import ConfigParser`/`<>`), then
+         restore the Py3-ported wheels afterwards.
+
+    Today this function is a no-op placeholder; it will be wired to a
+    `hzforge upgrade-trac` subcommand when the scope above is implemented.
+    """
+    pass  # TODO: implement per the docstring above
+
+
 # ---------------------------------------------------------------------------- #
 def build_parser():
     common = argparse.ArgumentParser(add_help=False)
