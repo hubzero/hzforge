@@ -179,3 +179,88 @@ def test_ldap_bindpw_inline_warns(monkeypatch):
 def test_trac_spec_exact_version(spec, expected, monkeypatch):
     monkeypatch.setattr(hz, "ARGS", make_args(trac_spec=spec), raising=False)
     assert hz._trac_spec_exact_version() == expected
+
+
+# --- upgrade-trac: _macros_universal_installed + _upgrade_trac_env ---
+
+def test_macros_universal_installed_true_if_any_python_can_import(monkeypatch):
+    monkeypatch.setattr(hz, "_ok", lambda cmd: cmd[0] == "python2")
+    assert hz._macros_universal_installed() is True
+
+
+def test_macros_universal_installed_false_when_neither_python_can_import(monkeypatch):
+    monkeypatch.setattr(hz, "_ok", lambda cmd: False)
+    assert hz._macros_universal_installed() is False
+
+
+def test_upgrade_trac_env_warns_about_legacy_macros_when_universal_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: False)
+    env = tmp_path / "histogram"
+    plugins = env / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "image.py").write_text("# legacy image macro")
+    (plugins / "link.py").write_text("# legacy link macro")
+    hz._upgrade_trac_env(str(env))
+    # universal missing -> files NOT moved
+    assert (plugins / "image.py").is_file()
+    assert (plugins / "link.py").is_file()
+    # ... but warnings name both, and reference the hubzero-trac-macros install:
+    notes_text = "\n".join(hz.CTX.notes)
+    assert "image.py" in notes_text
+    assert "link.py"  in notes_text
+    assert "install hubzero-trac-macros" in notes_text
+
+
+def test_upgrade_trac_env_disables_legacy_macros_when_universal_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: True)
+    env = tmp_path / "wiki"
+    plugins = env / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "image.py").write_text("# legacy image macro")
+    (plugins / "link.py").write_text("# legacy link macro")
+    hz._upgrade_trac_env(str(env))
+    # originals moved aside -> .disabled siblings remain
+    assert not (plugins / "image.py").exists()
+    assert     (plugins / "image.py.disabled").is_file()
+    assert not (plugins / "link.py").exists()
+    assert     (plugins / "link.py.disabled").is_file()
+
+
+def test_upgrade_trac_env_dry_run_does_not_move_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(True), raising=False)   # dry=True
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: True)
+    env = tmp_path / "x"
+    plugins = env / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "image.py").write_text("# legacy")
+    hz._upgrade_trac_env(str(env))
+    assert (plugins / "image.py").is_file()                 # still here
+    assert not (plugins / "image.py.disabled").exists()     # not moved
+
+
+def test_upgrade_trac_env_warns_about_stale_components_in_trac_ini(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: True)
+    env = tmp_path / "histogram"
+    conf = env / "conf"
+    conf.mkdir(parents=True)
+    (conf / "trac.ini").write_text(
+        "[components]\n"
+        "image.* = enabled\n"
+        "link.linkMacro = enabled\n"
+        "trac.* = enabled\n"
+    )
+    hz._upgrade_trac_env(str(env))
+    notes_text = "\n".join(hz.CTX.notes)
+    assert "image.*"        in notes_text
+    assert "link.linkMacro" in notes_text
+    assert "trac.*"     not in notes_text    # non-legacy entry not flagged
+
+
+def test_upgrade_trac_env_handles_missing_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: False)
+    hz._upgrade_trac_env(str(tmp_path / "nonexistent"))
+    assert any("not a directory" in n for n in hz.CTX.notes)

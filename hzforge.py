@@ -38,6 +38,7 @@ Bare `hzforge` (no command) prints help.
 """
 
 import argparse
+import configparser
 import grp
 import os
 import pwd
@@ -1305,36 +1306,96 @@ def repair():
     doctor()
 
 
+def _macros_universal_installed():
+    """True iff the universal `hubzero_macros` plugin is importable by some
+    Python available on this host (Py2 today; Py3 after Stage 2).  When yes,
+    per-env legacy `image.py`/`link.py` copies are safe to disable because
+    the universal plugin keeps serving the same `[[image …]]` / `[[link …]]`
+    macros."""
+    for py in ("python2", "python3"):
+        if _ok([py, "-c", "import hubzero_macros"]):
+            return True
+    return False
+
+
 def _upgrade_trac_env(env_path):
-    """STUB -- per-env Trac upgrade tasks (not yet implemented).
+    """Per-env Trac upgrade: legacy macro cleanup + trac.ini sanity.
 
-    When this lands it will own bringing a single Trac env up to current
-    expectations.  Planned scope:
+    Today (items 1 & 2 of the original scope):
+      * Move any `<env>/plugins/{image,link}.py` left over from forge's
+        `installtool` to `<file>.disabled` -- BUT only when the universal
+        `hubzero_macros` plugin is installed (a Python on the host can
+        `import hubzero_macros`), so the env keeps serving those macros.
+        Otherwise just warn and leave them in place.
+      * Read `<env>/conf/trac.ini` and warn on any `[components]` entry
+        starting with `image.` or `link.` -- those mask the universal
+        plugin's `hubzero_macros.image`/`.link` modules and want cleanup.
 
-      1. **Legacy macro cleanup.**  Remove the stale per-env macros at
-         `<env>/plugins/{image,link}.py` (forge dropped these into envs at
-         tool-create time; the universal `hubzero_macros` plugin replaces them
-         system-wide and the per-env copies become redundant once it is
-         pip-installed).
-      2. **Plugin installation/config verification.**  Confirm the expected
-         universal Trac plugins (`hubzeroplugin` from `hubzero-trac-mysqlauthz`,
-         `hubzero_macros`) are discoverable via `pkg_resources.iter_entry_points`
-         at the current pinned versions, and that `<env>/conf/trac.ini` does
-         not have stale `[components]` enable/disable lines pointing at removed
-         per-env modules.
-      3. **(Stage 2) DB schema walk** db29 -> db45 against the per-env SQLite
-         via a headless Py3 Trac 1.6 (`Environment(env_path).needs_upgrade()`
-         then `DatabaseManager(env).upgrade(45)`, then `WikiAdmin._do_upgrade()`),
-         with a `cp -a <env> <env>.bak-<ts>` backup beforehand.
-      4. **(Stage 2) Plugin quarantine across the schema walk** -- move
-         Py2-only eggs aside before Trac 1.6 boots over the env (component
-         discovery would otherwise crash on `import ConfigParser`/`<>`), then
-         restore the Py3-ported wheels afterwards.
+    Stage 2 (DB schema walk db29 -> db45, Py2-plugin quarantine across the
+    walk) is still pending; it gates on a Py3.11 + Trac 1.6 install."""
+    name = os.path.basename(env_path)
+    step(f"Upgrade trac env: {name}")
+    if not os.path.isdir(env_path):
+        warn(f"  {env_path}: not a directory")
+        return
 
-    Today this function is a no-op placeholder; it will be wired to a
-    `hzforge upgrade-trac` subcommand when the scope above is implemented.
-    """
-    pass  # TODO: implement per the docstring above
+    universal_ok = _macros_universal_installed()
+    plugins_dir = os.path.join(env_path, "plugins")
+    if os.path.isdir(plugins_dir):
+        for legacy in ("image.py", "link.py"):
+            src = os.path.join(plugins_dir, legacy)
+            if not os.path.isfile(src):
+                continue
+            if universal_ok:
+                _rename(src, src + ".disabled")
+            else:
+                warn(f"  legacy {plugins_dir}/{legacy} present; install "
+                     "hubzero-trac-macros first, then re-run upgrade-trac")
+
+    trac_ini = os.path.join(env_path, "conf", "trac.ini")
+    if os.path.isfile(trac_ini):
+        try:
+            cp = configparser.RawConfigParser()
+            cp.optionxform = str   # `[components]` keys are case-sensitive
+            cp.read(trac_ini)
+            if cp.has_section("components"):
+                for opt, val in cp.items("components"):
+                    if opt.startswith(("image.", "link.")):
+                        warn(f"  {trac_ini} [components] {opt} = {val}  "
+                             "(legacy per-env macro reference; safe to remove)")
+        except (configparser.Error, OSError) as e:
+            warn(f"  could not read {trac_ini}: {e}")
+    log("  done")
+
+
+def cmd_upgrade_trac():
+    """`hzforge upgrade-trac [env ...]` -- run _upgrade_trac_env() per env.
+    With no positional ENV args, runs across every env under /opt/trac/tools/
+    (a subdir containing conf/trac.ini)."""
+    tools_dir = OPT["trac_tools"][0]
+    if not os.path.isdir(tools_dir):
+        die(f"trac not configured (no {tools_dir})")
+    all_envs = sorted(
+        d for d in os.listdir(tools_dir)
+        if os.path.isdir(os.path.join(tools_dir, d))
+        and os.path.isfile(os.path.join(tools_dir, d, "conf", "trac.ini"))
+    )
+    requested = list(getattr(ARGS, "envs", None) or [])
+    if requested:
+        bad = [e for e in requested if e not in all_envs]
+        if bad:
+            die(f"unknown env(s): {', '.join(bad)}  "
+                f"(have: {', '.join(all_envs) or '(none)'})")
+        targets = requested
+    else:
+        targets = all_envs
+    step(f"Upgrade {len(targets)} trac env(s): {','.join(targets) or '(none)'}")
+    for env_name in targets:
+        _upgrade_trac_env(os.path.join(tools_dir, env_name))
+    # Anything _rename()d set CTX.config_changed; apply_changes() does the
+    # graceful httpd reload so the mod_wsgi daemon picks up the per-env
+    # plugin changes.  (No-op if nothing was actually moved.)
+    apply_changes()
 
 
 # ---------------------------------------------------------------------------- #
@@ -1383,6 +1444,10 @@ def build_parser():
                         help="create throwaway projects and verify each service serves")
     pt.add_argument("services", nargs="*", metavar="SERVICE",
                     help=svc_help + " to test; default: all configured")
+    pug = sub.add_parser("upgrade-trac", parents=[common],
+                         help="per-env Trac upgrade (legacy macro cleanup + trac.ini sanity)")
+    pug.add_argument("envs", nargs="*", metavar="ENV",
+                     help="trac envs to upgrade (under /opt/trac/tools); default: all configured")
     return p
 
 
@@ -1417,6 +1482,13 @@ def main():
     if args.command == "uninstall" and not services:
         die("uninstall needs at least one service: " + " ".join(ALL_SERVICES))
     args.services = services
+    # envs (positional on upgrade-trac); allow comma-joined like services.
+    # Not validated against ALL_SERVICES -- envs are arbitrary subdirs of
+    # /opt/trac/tools/ and the existence check happens in cmd_upgrade_trac().
+    envs = []
+    for tok in (getattr(args, "envs", None) or []):
+        envs += [e for e in tok.split(",") if e]
+    args.envs = envs
     ARGS = args
 
     print("=" * 72)
@@ -1437,6 +1509,8 @@ def main():
         repair()
     elif args.command == "test":
         cmd_test()
+    elif args.command == "upgrade-trac":
+        cmd_upgrade_trac()
 
     step("Done")
     for n in CTX.notes:
