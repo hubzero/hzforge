@@ -17,9 +17,16 @@ build-backend = "setuptools.build_meta"
 #              get_permission_groups (broken since at least 2011); filter on
 #              self.project_id directly, add DISTINCT, drop the unused
 #              p.action column.  Final audit-table item resolved.
+#   hzforge.5  add tests/ -- 17 pytest cases covering the context manager
+#              (close on normal/exception exit), __init__ (existing+create
+#              paths), get_user_permissions, get_users_with_permissions
+#              (parameterized IN clause sized to len(permissions)),
+#              grant/revoke, get_permission_groups, and two regression
+#              tests locking in the hzforge.2 (parameterization) and
+#              hzforge.4 (no `proj` alias) fixes.  All 17 pass.
 [project]
 name            = "hubzero-trac-mysqlauthz"
-version         = "2.2.5+hzforge.4"
+version         = "2.2.5+hzforge.5"
 description     = "HUBzero IPermissionStore / IPermissionGroupProvider for Trac (MySQL CMS backend)"
 readme          = "README.md"
 license         = { text = "MIT" }
@@ -62,3 +69,7 @@ Upstream = "https://gitlab.hubzero.org/hubzero-packaging-repositories/hubzero-tr
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]    # so `from hubzeroplugin import api` resolves to src/hubzeroplugin/

@@ -38,10 +38,24 @@ Iteration log (each commit lands one row of the audit table):
 | `hzforge.2` | Parameterize every `cursor.execute()` — closes the SQL-injection class |
 | `hzforge.3` | Connection management rewrite — drop the `HubzeroDatabaseConnection` singleton in favor of `with _cms_cursor()`; eliminates the thread-unsafe class-level state and the `disconnect()` connection leak.  Incidentally also fixes the `int + str` log concat in `__init__`, the double-construct in `PermissionGroupProvider.__init__`, and removes the unreachable `if True:`/elif dead code in `grant_permission`/`revoke_permission`. |
 | `hzforge.4` | Fix `get_permission_groups` — the query referenced an undefined `proj` alias in `WHERE`/`FROM` (broken since at least 2011).  Resolved by filtering on `self.project_id` directly (matches every other query in the plugin), with `DISTINCT` added to avoid duplicate `@group` entries and the unused `p.action` column dropped. |
+| `hzforge.5` | Add `tests/` — 17 pytest cases covering the context manager (close on normal+exception exit), `__init__` paths, `get_user_permissions`, `get_users_with_permissions` (parametrized over the IN-clause size), `grant`/`revoke`, `get_permission_groups`, plus regression tests locking in the parameterization (hzforge.2) and the `proj`-alias fix (hzforge.4).  Trac + the CMS DB are stubbed; no real Trac install or MySQL required. |
 
 **All audit-table items are now resolved.**  The plugin is ready for
 production install once the Py3 stack (Trac 1.6 under python3.11-mod_wsgi)
 is provisioned.
+
+## Running the tests
+
+```sh
+cd plugins/mysqlauthz
+python3.11 -m pytest          # 17 tests, ~0.2s
+# Py2.7 runs the same suite via pytest 4.6.x (last Py2-supporting line):
+#   python2 -m pip install --user 'pytest<5' 'configparser' 'pymysql<1.0'
+#   python2 -m pytest
+```
+
+Tests use the `pythonpath = ["src"]` and `testpaths = ["tests"]` settings
+in `pyproject.toml` to find the plugin source and discover the test files.
 
 ## Provenance
 
