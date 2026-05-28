@@ -2,14 +2,17 @@
 requires      = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# Dual-target Py2.7 + Py3.11 wheel.  This iteration (hzforge.1) is the
-# Py3-compatibility port -- import names + `<>` operator only, no behavior
-# change.  The audit-list items still pending (SQL injection, class-level
-# connection state, the `proj`-undefined bug, etc.) land in follow-up
-# commits in subsequent iterations (hzforge.2, .3, ...).
+# Dual-target Py2.7 + Py3.11 wheel.  Iterations:
+#   hzforge.0  verbatim copy of upstream 2.2.5
+#   hzforge.1  Py3-compatibility port (import names, <> operator, future imports)
+#   hzforge.2  parameterize every cursor.execute() -- close the SQL-injection class
+#              (also enables PyMySQL's driver-side quoting / type handling)
+# Items still pending: class-level connection state, disconnect() never closes,
+# project_id int+str log concat, get_permission_groups undefined `proj` alias,
+# unreachable `if True:` elif branches.
 [project]
 name            = "hubzero-trac-mysqlauthz"
-version         = "2.2.5+hzforge.1"
+version         = "2.2.5+hzforge.2"
 description     = "HUBzero IPermissionStore / IPermissionGroupProvider for Trac (MySQL CMS backend)"
 readme          = "README.md"
 license         = { text = "MIT" }
