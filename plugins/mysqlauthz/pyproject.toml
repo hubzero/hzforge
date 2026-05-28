@@ -2,15 +2,14 @@
 requires      = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# Verbatim source baseline: hubzero-trac-mysqlauthz-2.2.5-1.el8 (Py2 only).
-# Subsequent commits port it to a dual-target Py2.7 + Py3.11 wheel and fix the
-# bugs surfaced in the audit (SQL injection, class-level connection state,
-# `<>` operator, `import ConfigParser`, `import MySQLdb`).  The first port
-# commit will widen `dependencies` to PyMySQL (env-marked) + `configparser`
-# backport on Py2.
+# Dual-target Py2.7 + Py3.11 wheel.  This iteration (hzforge.1) is the
+# Py3-compatibility port -- import names + `<>` operator only, no behavior
+# change.  The audit-list items still pending (SQL injection, class-level
+# connection state, the `proj`-undefined bug, etc.) land in follow-up
+# commits in subsequent iterations (hzforge.2, .3, ...).
 [project]
 name            = "hubzero-trac-mysqlauthz"
-version         = "2.2.5+hzforge.0"
+version         = "2.2.5+hzforge.1"
 description     = "HUBzero IPermissionStore / IPermissionGroupProvider for Trac (MySQL CMS backend)"
 readme          = "README.md"
 license         = { text = "MIT" }
@@ -31,11 +30,15 @@ classifiers     = [
 dependencies    = [
     # Trac itself spans the range we target: 1.0.x on Py2 hubs through 1.6+ on Py3 hubs.
     "Trac>=1.0",
-    # MySQLdb (`mysql-python` / `mysqlclient`) is currently required at runtime by
-    # the verbatim source; it's deliberately NOT listed here because the port
-    # commit replaces `import MySQLdb` with `import pymysql` and adds PyMySQL +
-    # configparser (Py2 backport) as the declared deps.  Until then, install via
-    # the OS package (`python2-mysql`) on Py2 hosts.
+    # PyMySQL replaces MySQLdb -- it works on both interpreters via env markers
+    # (the 0.10.x line is the last Py2-capable PyMySQL; 1.x is Py3-only).  Its
+    # connect() accepts MySQLdb's `passwd=`/`db=` kwarg names as aliases, so the
+    # call site doesn't need to change.
+    "PyMySQL<1.0; python_version<'3'",
+    "PyMySQL>=1.0; python_version>='3'",
+    # configparser is in the Py3 stdlib; the PyPI backport gives Py2 the same
+    # module name so `from configparser import RawConfigParser` works on both.
+    "configparser; python_version<'3'",
 ]
 
 [project.entry-points."trac.plugins"]

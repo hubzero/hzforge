@@ -30,16 +30,22 @@
 
 """Management of permissions."""
 
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+import re
+
+# Py3 stdlib or Py2 PyPI backport (declared in pyproject.toml).
+from configparser import RawConfigParser
+
+# PyMySQL is a drop-in replacement for MySQLdb at the surface we use
+# (host=/user=/passwd=/db=/.cursor()/.insert_id()).  The `as MySQLdb` alias
+# keeps the existing call sites (MySQLdb.connect(...)) untouched -- the only
+# import-level work in this port is at the top of the file.
+import pymysql as MySQLdb
+from pymysql.err import ProgrammingError, OperationalError
+
 from trac.core import *
 from trac.perm import IPermissionGroupProvider, IPermissionStore
-import ConfigParser, re
-
-import MySQLdb
-
-try:
-    from _mysql_exceptions import ProgrammingError, OperationalError
-except ImportError:
-    from MySQLdb._exceptions import ProgrammingError, OperationalError
 
 __all__ = ['IPermissionStore', 'IPermissionGroupProvider']
 
@@ -68,7 +74,7 @@ class HubzeroDatabaseConnection(object):
         self.env.log.debug('HubzeroDatabaseConnection::connect() already connected. end')
         return 1
 
-      config = ConfigParser.RawConfigParser()
+      config = RawConfigParser()
       config.read('/etc/hubzero.conf')
       section = config.get('DEFAULT','site')
       docroot = config.get(section, 'DocumentRoot')
@@ -377,14 +383,14 @@ class HubzeroPermissionStore(Component):
               self.log.debug('found user id ' + str(row[0]))
               uidNumber = str(row[0])
 
-          if uidNumber <> None:
+          if uidNumber is not None:
             self.env.log.debug('HubzeroPermissionStore::grant_permission(): INSERT IGNORE INTO jos_trac_user_permission (user_id,action,trac_project_id) VALUE (\'' + uidNumber + '\',\'' + action + '\',\'' + self.project_id + '\');')
             cursor.execute('INSERT IGNORE INTO jos_trac_user_permission (user_id,action,trac_project_id) VALUE (\'' + uidNumber + '\',\'' + action + '\',\'' + self.project_id + '\');')
-          if gidNumber <> None:
+          if gidNumber is not None:
             self.env.log.debug('HubzeroPermissionStore::grant_permission(): INSERT IGNORE INTO jos_trac_group_permission (group_id,action,trac_project_id) VALUE (\'' + gidNumber + '\',\'' + action + '\',\'' + self.project_id + '\');')
             cursor.execute('INSERT IGNORE INTO jos_trac_group_permission (group_id,action,trac_project_id) VALUE (\'' + gidNumber + '\',\'' + action + '\',\'' + self.project_id + '\');')
         else:
-          if username and username <> 'anonymous' and username <> 'authenticated':
+          if username and username != 'anonymous' and username != 'authenticated':
             
             self.env.log.debug('HubzeroPermissionStore::grant_permission(): SELECT id FROM jos_users WHERE username=\'' + username + '\'')
             cursor.execute('SELECT id FROM jos_users WHERE username=\'' + username + '\'')
@@ -404,7 +410,7 @@ class HubzeroPermissionStore(Component):
 
             if True:
               self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
-            elif gidNumber <> None and uidNumber <> None:
+            elif gidNumber is not None and uidNumber is not None:
               self.env.log.debug('HubzeroPermissionStore::grant_permission(): INSERT IGNORE INTO jos_xgroups_members (gidNumber, uidNumber) VALUES (\'' + gidNumber + '\',\'' + uidNumber + '\')')
               cursor.execute('INSERT IGNORE INTO jos_xgroups_members (gidNumber, uidNumber) VALUES (\'' + gidNumber + '\',\'' + uidNumber + '\')')
               self.env.debug.info('Granted permission for %s to %s' % (action, username))
@@ -450,16 +456,16 @@ class HubzeroPermissionStore(Component):
               self.log.debug('found user id ' + str(row[0]))
               uidNumber = str(row[0])
 
-          if uidNumber <> None:
+          if uidNumber is not None:
             self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_trac_user_permission WHERE trac_project_id=\'' + self.project_id + '\' AND user_id=\'' + uidNumber + '\' AND action=\'' + action + '\';')
             cursor.execute('DELETE FROM jos_trac_user_permission WHERE trac_project_id=\'' + self.project_id + '\' AND user_id=\'' + uidNumber + '\' AND action=\'' + action + '\';')
-          if gidNumber <> None:
+          if gidNumber is not None:
             self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_trac_group_permission WHERE trac_project_id=\'' + self.project_id + '\' AND group_id=\'' + gidNumber + '\' AND action=\'' + action + '\';')
             cursor.execute('DELETE FROM jos_trac_group_permission WHERE trac_project_id=\'' + self.project_id + '\' AND group_id=\'' + gidNumber + '\' AND action=\'' + action + '\';')
 
         else:
 
-          if username and username <> 'anonymous' and username <> 'authenticated':
+          if username and username != 'anonymous' and username != 'authenticated':
             
             self.env.log.debug('HubzeroPermissionStore::revoke_permission(): SELECT id FROM jos_users WHERE username=\'' + username + '\'')
             cursor.execute('SELECT id FROM jos_users WHERE username=\'' + username + '\'')
@@ -479,7 +485,7 @@ class HubzeroPermissionStore(Component):
 
             if True:
               self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
-            elif gidNumber <> None and uidNumber <> None:
+            elif gidNumber is not None and uidNumber is not None:
               self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_xgroups_members WHERE gidNumber=\'' + gidNumber + '\' AND uidNumber=\'' + uidNumber + '\'')
               cursor.execute('DELETE FROM jos_xgroups_members WHERE gidNumber=\'' + gidNumber + '\' AND uidNumber=\'' + uidNumber + '\'')
               self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_xgroups_managers WHERE gidNumber=\'' + gidNumber + '\' AND uidNumber=\'' + uidNumber + '\'')

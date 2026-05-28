@@ -16,23 +16,24 @@ This directory is **the in-progress hzforge fork** of the upstream plugin. The
 target is a dual-target Py2.7 + Py3.11 wheel that also fixes a set of latent
 bugs surfaced during a code audit.
 
-| Concern | Plan |
+| Concern | Status |
 |---|---|
-| Python 2/3 compatibility | One source, env-marker deps (PyMySQL, configparser backport on Py2) |
-| `import MySQLdb` (Py2-only driver) | Swap to `import pymysql` (works on both Py2 and Py3) |
-| `import ConfigParser` (Py2 module name) | `from configparser import RawConfigParser` (Py3 stdlib or PyPI backport on Py2) |
-| `<>` not-equal operator (Py2-only) | `!=` (8 sites) |
-| SQL string concatenation (injection class) | Parameterized queries throughout (~17 sites) |
-| Class-level `db`/`dbcursor` (thread-unsafe singleton) | Per-instance, `with closing(self.db.cursor()) as cur:` |
-| `disconnect()` never closes the connection | Actually `.close()` it |
-| `__init__` log of `int + str` (`self.project_id` typo) | Coerce with `str()` |
-| `get_permission_groups` query references undefined `proj` alias | Add `jos_trac_project AS proj` to FROM |
-| Unreachable `elif` branches behind `if True:` | Delete or gate explicitly |
+| Python 2/3 compatibility | **Done** (hzforge.1) — one source, env-marker deps (PyMySQL, configparser backport on Py2), `from __future__ import absolute_import, division, print_function, unicode_literals` |
+| `import MySQLdb` (Py2-only driver) | **Done** (hzforge.1) — `import pymysql as MySQLdb` (PyMySQL is an API-compatible replacement; legacy `passwd=`/`db=` kwargs still work) |
+| `import ConfigParser` (Py2 module name) | **Done** (hzforge.1) — `from configparser import RawConfigParser` |
+| `<>` not-equal operator (Py2-only) | **Done** (hzforge.1) — 8 sites converted (`is not None` for `None`, `!=` for string compares) |
+| SQL string concatenation (injection class) | Pending — parameterize ~17 sites |
+| Class-level `db`/`dbcursor` (thread-unsafe singleton) | Pending — make per-instance, `with closing(self.db.cursor()) as cur:` |
+| `disconnect()` never closes the connection | Pending — actually `.close()` it |
+| `__init__` log of `int + str` (`self.project_id` typo) | Pending — coerce with `str()` |
+| `get_permission_groups` query references undefined `proj` alias | Pending — add `jos_trac_project AS proj` to FROM |
+| Unreachable `elif` branches behind `if True:` | Pending — delete or gate explicitly |
 
-The current commit is a **verbatim copy** of the deployed
-`hubzero-trac-mysqlauthz-2.2.5-1.el8` RPM contents — byte-identical to
-`/usr/lib/python2.7/site-packages/hubzeroplugin/{__init__,api}.py`. Subsequent
-commits land each of the items above so the diff cleanly shows the change.
+This commit (`hzforge.1`) is the **Py3-compatibility port**: import names and
+`<>` operator, plus the `from __future__` future-import block. **No behavior
+change** otherwise — the SQL queries, the connection handling, and the bugs
+in the table above are unchanged and land in subsequent iterations
+(`hzforge.2`, `.3`, …) so each commit's diff cleanly shows its own concern.
 
 ## Provenance
 
