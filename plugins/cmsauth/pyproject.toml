@@ -1,0 +1,17 @@
+[build-system]
+requires      = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Project metadata (name, version, dependencies, entry_points, ...) lives in
+# setup.cfg -- so this package builds on Rocky 8's stock Py3.6 + setuptools 59
+# (which predates PEP 621 [project] support in pyproject.toml).
+#
+# Dual-target Py2.7 + Py3.x wheel.  This is hubzero-trac-cmsauth 1.0.0 -- a
+# Trac plugin that single-signs-on against the HUBzero CMS by forwarding the
+# user's CMS session cookie(s) to /api/v1.1/members/currentuser and using
+# the returned profile.username as REMOTE_USER.  Pairs with HubzeroLoginModule,
+# which owns Trac's /login and /logout and redirects them to the CMS.
+
+[tool.pytest.ini_options]
+testpaths  = ["tests"]
+pythonpath = ["src"]    # so `from hubzero_cmsauth import api` resolves to src/hubzero_cmsauth/
