@@ -13,10 +13,13 @@ build-backend = "setuptools.build_meta"
 #              incidental cleanup of the int+str project_id log concat, the
 #              double-construct in PermissionGroupProvider.__init__, and the
 #              unreachable `if True:`/elif dead code in grant/revoke
-# Still pending: get_permission_groups undefined `proj` alias (one query bug).
+#   hzforge.4  fix the broken `proj`-undefined-alias query in
+#              get_permission_groups (broken since at least 2011); filter on
+#              self.project_id directly, add DISTINCT, drop the unused
+#              p.action column.  Final audit-table item resolved.
 [project]
 name            = "hubzero-trac-mysqlauthz"
-version         = "2.2.5+hzforge.3"
+version         = "2.2.5+hzforge.4"
 description     = "HUBzero IPermissionStore / IPermissionGroupProvider for Trac (MySQL CMS backend)"
 readme          = "README.md"
 license         = { text = "MIT" }

@@ -417,18 +417,26 @@ class HubzeroPermissionGroupProvider(Component):
         if not (username and username != 'anonymous'):
             return groups
         groups.append('authenticated')
+        if self.project_id is None:
+            return groups
         try:
             with _cms_cursor(self.env) as (cursor, _db):
-                # NOTE: this query also references an undefined `proj` alias
-                # in WHERE / FROM -- a pre-existing bug fixed in a separate
-                # commit.
-                cursor.execute('SELECT g.cn,p.action FROM jos_xgroups AS g, jos_xgroups_members AS m, '
+                # The previous query referenced `proj.name`/`proj.id` in WHERE
+                # without ever declaring `proj` in FROM (broken since at least
+                # 2011).  Fix: filter directly on `p.trac_project_id` -- we
+                # already resolved the project name to project_id in __init__
+                # and store it as self.project_id, so the join is unnecessary
+                # (matches the pattern of every other query in this plugin).
+                # Also: drop the unused `p.action` column, and DISTINCT so a
+                # user with multiple permissions via the same group doesn't
+                # produce duplicate `@group` entries in the return list.
+                cursor.execute('SELECT DISTINCT g.cn FROM jos_xgroups AS g, jos_xgroups_members AS m, '
                                'jos_trac_group_permission AS p, jos_users AS u '
-                               'WHERE proj.name = %s AND m.uidNumber = u.id AND u.username = %s '
-                               'AND m.gidNumber = g.gidNumber AND g.gidNumber = p.group_id '
-                               'AND proj.id = p.trac_project_id',
-                               (self.project, username))
-                for groupname, _action in cursor.fetchall():
+                               'WHERE p.trac_project_id = %s AND m.uidNumber = u.id '
+                               'AND u.username = %s AND m.gidNumber = g.gidNumber '
+                               'AND g.gidNumber = p.group_id',
+                               (self.project_id, username))
+                for (groupname,) in cursor.fetchall():
                     groups.append('@' + groupname)
         except Exception:
             self.env.log.exception('HubzeroPermissionGroupProvider::get_permission_groups(%r) failed', username)

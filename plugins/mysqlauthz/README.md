@@ -26,7 +26,7 @@ bugs surfaced during a code audit.
 | Class-level `db`/`dbcursor` (thread-unsafe singleton) | **Done** (hzforge.3) — replaced by per-method `with _cms_cursor(self.env)` context manager; each call opens its own connection |
 | `disconnect()` never closes the connection | **Done** (hzforge.3) — `with` block actually closes the connection on exit |
 | `__init__` log of `int + str` (`self.project_id` typo) | **Done** (hzforge.3) — `str(db.insert_id())` plus lazy `%s` log format |
-| `get_permission_groups` query references undefined `proj` alias | Pending — add `jos_trac_project AS proj` to FROM |
+| `get_permission_groups` query references undefined `proj` alias | **Done** (hzforge.4) — filter on `self.project_id` directly instead of adding the `proj` join (matches every other query); also dropped the unused `p.action` column and added `DISTINCT` so multi-permission group memberships don't produce duplicate `@group` entries |
 | Unreachable `elif` branches behind `if True:` | **Done** (hzforge.3) — dead `INSERT/DELETE FROM jos_xgroups_members/_managers` branches dropped from grant/revoke |
 
 Iteration log (each commit lands one row of the audit table):
@@ -37,9 +37,11 @@ Iteration log (each commit lands one row of the audit table):
 | `hzforge.1` | Py3 compatibility — `import` names, `<>` operator, future imports |
 | `hzforge.2` | Parameterize every `cursor.execute()` — closes the SQL-injection class |
 | `hzforge.3` | Connection management rewrite — drop the `HubzeroDatabaseConnection` singleton in favor of `with _cms_cursor()`; eliminates the thread-unsafe class-level state and the `disconnect()` connection leak.  Incidentally also fixes the `int + str` log concat in `__init__`, the double-construct in `PermissionGroupProvider.__init__`, and removes the unreachable `if True:`/elif dead code in `grant_permission`/`revoke_permission`. |
+| `hzforge.4` | Fix `get_permission_groups` — the query referenced an undefined `proj` alias in `WHERE`/`FROM` (broken since at least 2011).  Resolved by filtering on `self.project_id` directly (matches every other query in the plugin), with `DISTINCT` added to avoid duplicate `@group` entries and the unused `p.action` column dropped. |
 
-The one remaining audit item — the `proj`-undefined alias in
-`get_permission_groups` — lands in `hzforge.4`.
+**All audit-table items are now resolved.**  The plugin is ready for
+production install once the Py3 stack (Trac 1.6 under python3.11-mod_wsgi)
+is provisioned.
 
 ## Provenance
 
