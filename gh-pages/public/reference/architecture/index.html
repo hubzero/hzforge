@@ -126,7 +126,8 @@ Apache split the URL.</p>
 <ul>
 <li><strong>mod_wsgi</strong> (default): <code>WSGIDaemonProcess</code> + <code>WSGIScriptAliasMatch</code> routing the
 Trac verbs to the shim. Trac core is pip-installed (<code>Trac</code>, <code>mod_wsgi==4.9.4</code> —
-the last Python-2-capable release), plus the <code>hubzero-trac</code> plugins.</li>
+the last Python-2-capable release), plus the <code>hubzeroplugin</code> auth components
+from the <code>hubzero-trac-mysqlauthz</code> rpm.</li>
 <li><strong>mod_python</strong> (legacy): one <code>&lt;Location /tools/&lt;name&gt;&gt;</code> per environment plus the
 trac-verb <code>[END]</code> shield. Selectable with <code>--trac-handler mod_python</code>.</li>
 </ul>
@@ -147,8 +148,7 @@ running server untouched.</p>
 error. So <code>install trac</code> does <strong>not</strong> pull <code>mod_dav_svn</code> or the <code>subversion-python</code>
 SWIG bindings. The browser is auto-enabled only when the svn service is also
 installed (which brings <code>subversion-python</code>), and <code>doctor</code> checks the browser only
-when svn is configured. (<code>hzforge</code> still enables the svn module/repo during trac
-setup, because the <code>hubzero-trac</code> rpm requires <code>subversion-devel</code>.)</p>
+when svn is configured.</p>
 <h2 id="package-sources-permissions">Package sources &amp; permissions</h2>
 <ul>
 <li><strong>Subversion / mod_dav_svn</strong>: from <code>wandisco-svn110</code> by default

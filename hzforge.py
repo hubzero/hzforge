@@ -327,8 +327,10 @@ def _svn_module_stream():
 
 
 def _enable_svn_source():
-    """Make subversion-* installable (needed even for trac: hubzero-trac rpm-requires
-    subversion-devel). Does NOT install anything itself."""
+    """Make subversion-* installable for the svn SERVICE.  (The trac stack no
+    longer needs this -- hzforge skips the `hubzero-trac` metapackage, whose
+    %post pip-installed subvertpy was the only reason subversion-devel was
+    pulled.) Does NOT install anything itself."""
     if ARGS.svn_source == "wandisco":
         ensure_wandisco_repo()
         # Only reset if a module stream is actually enabled; with module_hotfixes=1
@@ -401,13 +403,22 @@ def setup_gitexternal():
 
 def setup_trac():
     step(f"Trac -- packages, dirs, handler ({ARGS.trac_handler})")
-    # plugins (HubzeroPermissionStore + hubzeroplugin); hubzero-trac rpm-requires
-    # subversion-devel, so the svn source must be enabled -- but we do NOT install
-    # the svn repo browser bindings here. Trac runs fine without them; the browser
-    # is auto-enabled only when the svn service is installed (it pulls subversion-python).
-    if not rpm_installed("hubzero-trac"):
-        _enable_svn_source()
-        dnf_install(["hubzero-trac"], enablerepo=_svn_repo())
+    # We deliberately do NOT install the `hubzero-trac` metapackage: its only
+    # meaningful runtime payload is hubzero-trac-mysqlauthz (the auth plugin),
+    # and its %post pip-installs Trac==1.0.13 + subvertpy -- both of which we
+    # don't want.  We pin Trac via TRAC_SPEC (doctor/repair enforce the pin)
+    # and use the svn.core SWIG bindings from `subversion-python` (installed
+    # by the svn SERVICE) instead of subvertpy.  Pull just the runtime + build
+    # deps we actually need.
+    needed = ["hubzero-trac-mysqlauthz"]               # from the hubzero repo
+    if ARGS.trac_handler == "mod_wsgi":
+        # pip-built mod_wsgi 4.9.4 needs a C toolchain + Apache + Py2 headers.
+        needed += ["gcc", "python2-devel", "httpd-devel"]   # AppStream
+    to_install = [p for p in needed if not rpm_installed(p)]
+    if to_install:
+        dnf_install(to_install)
+    # Repo browser support (svn.core) is auto-enabled via subversion-python
+    # when the svn SERVICE is installed; Trac runs fine without it.
     makedir(*OPT["trac"])
     makedir(*OPT["trac_tools"])
     if ARGS.trac_handler == "mod_wsgi":

@@ -63,7 +63,8 @@ Apache split the URL.
 
 - **mod_wsgi** (default): `WSGIDaemonProcess` + `WSGIScriptAliasMatch` routing the
   Trac verbs to the shim. Trac core is pip-installed (`Trac`, `mod_wsgi==4.9.4` —
-  the last Python-2-capable release), plus the `hubzero-trac` plugins.
+  the last Python-2-capable release), plus the `hubzeroplugin` auth components
+  from the `hubzero-trac-mysqlauthz` rpm.
 - **mod_python** (legacy): one `<Location /tools/<name>>` per environment plus the
   trac-verb `[END]` shield. Selectable with `--trac-handler mod_python`.
 
@@ -88,8 +89,7 @@ Trac runs fine without Subversion; only the repository *browser* degrades to an
 error. So `install trac` does **not** pull `mod_dav_svn` or the `subversion-python`
 SWIG bindings. The browser is auto-enabled only when the svn service is also
 installed (which brings `subversion-python`), and `doctor` checks the browser only
-when svn is configured. (`hzforge` still enables the svn module/repo during trac
-setup, because the `hubzero-trac` rpm requires `subversion-devel`.)
+when svn is configured.
 
 ## Package sources & permissions
 

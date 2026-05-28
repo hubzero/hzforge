@@ -66,8 +66,7 @@ install -d -m 0710 -o root -g apache /run/httpd
 
 ### A1. Subversion source
 
-`hubzero-trac` rpm-requires `subversion-devel`, and the `svn` service needs
-`subversion` + `mod_dav_svn`. Pick **one** source.
+The `svn` service needs `subversion` + `mod_dav_svn`. Pick **one** source.
 
 **AppStream (simplest):**
 
@@ -98,8 +97,11 @@ With WanDisco, append `--enablerepo=wandisco-svn110` to the `subversion`/`mod_da
 ### A2. Trac packages and the WSGI stack
 
 ```sh
-# Trac plugins (pulls subversion-devel from the source enabled above)
-dnf -y install hubzero-trac
+# auth/permission plugin + build deps for the pip-built mod_wsgi (gcc, Python
+# and Apache headers).  We deliberately skip the hubzero-trac metapackage --
+# its %post pip-installs Trac 1.0.13 and subvertpy, conflicting with the Trac
+# pin and the SWIG svn.core we get from subversion-python.
+dnf -y install hubzero-trac-mysqlauthz gcc python2-devel httpd-devel
 
 # Trac + mod_wsgi from PyPI. umask 022 so root-built files are world-readable
 # (apache must import them); the default umask 0077 would make Trac return 500.
@@ -285,19 +287,23 @@ The legacy in-process handler. Unlike mod_wsgi there is **no generic route**: ea
 environment needs its own `<Location>` block, so the drop-in is regenerated whenever you
 add or remove envs.
 
-### B1. Subversion source
+### B1. (Optional) Trac repository browser bindings
 
-Same as [A1](#a1-subversion-source) — `hubzero-trac` still needs `subversion-devel`, so
-enable a source even though you are not installing the `svn` service:
+Trac doesn't need Subversion to run, but if you want the **repo browser** working
+under mod_python you need the SWIG svn bindings from the hubzero repo:
 
 ```sh
-dnf -y module enable subversion:1.10      # (or set up the WanDisco repo as in A1)
+dnf -y install subversion-python      # provides svn.core for Trac's browser
 ```
+
+Skip this section entirely if you don't need the repo browser.
 
 ### B2. Trac packages and mod_python
 
 ```sh
-dnf -y install hubzero-trac
+# auth/permission plugin (we deliberately skip the hubzero-trac metapackage --
+# its %post pip-installs Trac 1.0.13, conflicting with our pin below).
+dnf -y install hubzero-trac-mysqlauthz
 
 umask 022
 pip2 install 'Trac==1.0.14'               # mod_python loads Trac from site-packages

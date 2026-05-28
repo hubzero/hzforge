@@ -14,9 +14,13 @@ WSGI shim that re-splits `SCRIPT_NAME`/`PATH_INFO` itself (see
 
 ## What the install does
 
-1. **Packages** — `hubzero-trac` (+ `hubzero-trac-mysqlauthz`, which provides
-   `HubzeroPermissionStore` and the `hubzeroplugin` components the envs need);
-   Trac core and `mod_wsgi==4.9.4` via pip (the last Python-2-capable release).
+1. **Packages** — `hubzero-trac-mysqlauthz` (provides `HubzeroPermissionStore`
+   and the `hubzeroplugin` components the envs need); for mod_wsgi, the build
+   toolchain (`gcc`, `python2-devel`, `httpd-devel`) and then Trac core +
+   `mod_wsgi==4.9.4` via pip (the last Python-2-capable release). The
+   `hubzero-trac` metapackage is deliberately skipped — its `%post`
+   pip-installs Trac 1.0.13 + subvertpy, conflicting with hzforge's Trac pin
+   and the SWIG `svn.core` bindings we get from `subversion-python`.
 2. **Shim** — `/opt/trac/wsgi/hubtrac.wsgi`.
 3. **Module config** — load mod_wsgi (`10-wsgi.conf`), **unload mod_python**
    (`10-python.conf` → `.disabled`); the two interpreters can't coexist.

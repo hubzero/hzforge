@@ -24,9 +24,12 @@ up a Python 2 Trac runtime.
 
 ## Packages & repositories
 
-- The **`hubzero` yum repo** — provides `hubzero-trac`, `hubzero-trac-mysqlauthz`
+- The **`hubzero` yum repo** — provides `hubzero-trac-mysqlauthz`
   (the `HubzeroPermissionStore` / `hubzeroplugin` components the Trac environments
-  require), and `subversion-python` (the Py2 SVN bindings for the Trac repo browser).
+  require) and `subversion-python` (the Py2 SVN bindings for the Trac repo browser).
+  hzforge deliberately skips the `hubzero-trac` metapackage — its `%post`
+  pip-installs Trac 1.0.13 + subvertpy, conflicting with hzforge's Trac pin and
+  the SWIG `svn.core` we use instead of subvertpy.
 - **Subversion / `mod_dav_svn`** — from **`wandisco-svn110`** by default
   (`--svn-source appstream` uses the appstream `subversion:1.10` module instead).
   hzforge writes the wandisco repo file when it's needed.

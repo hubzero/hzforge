@@ -96,9 +96,12 @@ Python-2-capable mod_wsgi release).</li>
 up a Python 2 Trac runtime.</p>
 <h2 id="packages-repositories">Packages &amp; repositories</h2>
 <ul>
-<li>The <strong><code>hubzero</code> yum repo</strong> — provides <code>hubzero-trac</code>, <code>hubzero-trac-mysqlauthz</code>
+<li>The <strong><code>hubzero</code> yum repo</strong> — provides <code>hubzero-trac-mysqlauthz</code>
 (the <code>HubzeroPermissionStore</code> / <code>hubzeroplugin</code> components the Trac environments
-require), and <code>subversion-python</code> (the Py2 SVN bindings for the Trac repo browser).</li>
+require) and <code>subversion-python</code> (the Py2 SVN bindings for the Trac repo browser).
+hzforge deliberately skips the <code>hubzero-trac</code> metapackage — its <code>%post</code>
+pip-installs Trac 1.0.13 + subvertpy, conflicting with hzforge's Trac pin and
+the SWIG <code>svn.core</code> we use instead of subvertpy.</li>
 <li><strong>Subversion / <code>mod_dav_svn</code></strong> — from <strong><code>wandisco-svn110</code></strong> by default
 (<code>--svn-source appstream</code> uses the appstream <code>subversion:1.10</code> module instead).
 hzforge writes the wandisco repo file when it's needed.</li>

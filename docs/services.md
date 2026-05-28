@@ -56,9 +56,12 @@ verbs (`wiki`, `timeline`, `roadmap`, `browser`, `changeset`, `ticket`,
 
 - Handler: mod_wsgi (default) or mod_python — see
   [architecture](../architecture/).
-- Packages: `hubzero-trac` (+ `hubzero-trac-mysqlauthz` — provides
-  `HubzeroPermissionStore` and the `hubzeroplugin` components the envs require);
-  Trac core + `mod_wsgi==4.9.4` via pip for the mod_wsgi handler.
+- Packages: `hubzero-trac-mysqlauthz` (provides `HubzeroPermissionStore` and the
+  `hubzeroplugin` components the envs require); for the mod_wsgi handler, build
+  deps (`gcc`, `python2-devel`, `httpd-devel`) plus Trac core + `mod_wsgi==4.9.4`
+  via pip. The `hubzero-trac` metapackage is deliberately not installed — its
+  `%post` pip-installs Trac 1.0.13 and subvertpy, both unwanted (hzforge pins
+  Trac via `TRAC_SPEC` and uses the SWIG `svn.core` from `subversion-python`).
 - Envs: `/opt/trac/tools/<name>` (paired with the matching `/opt/svn/tools/<name>`
   repository for the browser).
 - Repo browser is optional — see

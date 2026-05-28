@@ -125,9 +125,12 @@ verbs (<code>wiki</code>, <code>timeline</code>, <code>roadmap</code>, <code>bro
 <ul>
 <li>Handler: mod_wsgi (default) or mod_python — see
 <a href="../architecture/">architecture</a>.</li>
-<li>Packages: <code>hubzero-trac</code> (+ <code>hubzero-trac-mysqlauthz</code> — provides
-<code>HubzeroPermissionStore</code> and the <code>hubzeroplugin</code> components the envs require);
-Trac core + <code>mod_wsgi==4.9.4</code> via pip for the mod_wsgi handler.</li>
+<li>Packages: <code>hubzero-trac-mysqlauthz</code> (provides <code>HubzeroPermissionStore</code> and the
+<code>hubzeroplugin</code> components the envs require); for the mod_wsgi handler, build
+deps (<code>gcc</code>, <code>python2-devel</code>, <code>httpd-devel</code>) plus Trac core + <code>mod_wsgi==4.9.4</code>
+via pip. The <code>hubzero-trac</code> metapackage is deliberately not installed — its
+<code>%post</code> pip-installs Trac 1.0.13 and subvertpy, both unwanted (hzforge pins
+Trac via <code>TRAC_SPEC</code> and uses the SWIG <code>svn.core</code> from <code>subversion-python</code>).</li>
 <li>Envs: <code>/opt/trac/tools/&lt;name&gt;</code> (paired with the matching <code>/opt/svn/tools/&lt;name&gt;</code>
 repository for the browser).</li>
 <li>Repo browser is optional — see
