@@ -83,38 +83,21 @@ class HubzeroSessionAuthenticator(Component):
     implements(IAuthenticator)
 
     # --- CMS API transport ------------------------------------------------- #
-    # Loopback HTTPS by default: connect to 127.0.0.1, forward the Host
-    # header from the incoming Trac request so Apache's name-based vhost
-    # matching routes to the CMS vhost (same one the browser is talking to).
-    api_host = Option(
-        "hubzero_cmsauth", "api_host", "127.0.0.1",
-        "Hostname/IP for the CMS API connection.  Loopback is correct in "
-        "almost every deployment; the actual vhost is selected via the "
-        "forwarded Host header (see api_vhost).",
-    )
-    api_port = IntOption(
-        "hubzero_cmsauth", "api_port", 443,
-        "TCP port for the CMS API connection (443 for HTTPS loopback; 80 "
-        "with use_https=false for plain HTTP).",
-    )
-    api_vhost = Option(
-        "hubzero_cmsauth", "api_vhost", "",
-        "Host: header forwarded on the API request.  Empty (default) means "
-        "'use the incoming request's Host header', which is the right thing "
-        "in practice -- the CMS lives at the same origin as Trac.",
-    )
+    # No host/port/scheme knobs by design: the API call uses the exact same
+    # scheme + host + port the browser used to reach Trac (read from the
+    # incoming request's wsgi.url_scheme + HTTP_HOST).  This means there's
+    # nothing to configure per-env and nothing that can drift between Trac
+    # and the CMS -- if the user can reach Trac at https://help.hubzero.org,
+    # the CMS API is reachable at https://help.hubzero.org/api/... by
+    # definition.  The trade-off vs loopback is one extra Apache hop per
+    # API call; that's amortized to ~one call per browser session by the
+    # trac_auth cookie path.
     api_path = Option(
         "hubzero_cmsauth", "api_path",
         "/api/v1.1/members/currentuser",
         "Path on the CMS that returns the current user's profile as JSON "
         "(authenticated by the Cookie header).  Defaults to the existing "
         "com_members v1.1 currentuser endpoint.",
-    )
-    use_https = BoolOption(
-        "hubzero_cmsauth", "use_https", True,
-        "True (default) -> HTTPS to 127.0.0.1 with TLS verification "
-        "disabled (loopback means no real MITM exposure).  False -> plain "
-        "HTTP; only safe if api_host is loopback.",
     )
     api_timeout_seconds = IntOption(
         "hubzero_cmsauth", "api_timeout_seconds", 5,
@@ -164,9 +147,8 @@ class HubzeroSessionAuthenticator(Component):
         if not cookie_header:
             return None
 
-        host_header = self.api_vhost or req.get_header("Host") or "localhost"
         try:
-            name = self._call_api(cookie_header, host_header)
+            name = self._call_api(req, cookie_header)
         except Exception as e:                                          # noqa: BLE001
             # Conservative: any error -> anonymous.  Log so operators can see.
             log.warning("hubzero_cmsauth: API lookup failed (%s); "
@@ -231,20 +213,41 @@ class HubzeroSessionAuthenticator(Component):
 
     # -- CMS API transport -------------------------------------------------- #
 
-    def _call_api(self, cookie_header, host_header):
-        """Open a one-shot HTTP(S) connection to the CMS API, forward the
-        cookies, and return the response's `profile.username` field (or
-        None for a 403/401 anonymous response).  Raises on transport or
-        protocol errors so authenticate() converts them to anonymous."""
-        if self.use_https:
+    def _call_api(self, req, cookie_header):
+        """Open a one-shot HTTP(S) connection to the same scheme + host +
+        port the browser used to reach Trac, forward the cookies to
+        api_path, and return the response's `profile.username` field (or
+        None for a 401/403 anonymous response).  Raises on transport or
+        protocol errors so authenticate() converts them to anonymous.
+
+        The point of deriving the API endpoint from the incoming request
+        (rather than hard-coding a loopback target) is zero per-env config
+        and zero drift: if the user can reach Trac, the CMS API is
+        reachable at the same origin by definition."""
+        env_ = getattr(req, "environ", None) or {}
+        scheme = (env_.get("wsgi.url_scheme") or "https").lower()
+        host_header = env_.get("HTTP_HOST") or env_.get("SERVER_NAME") or "localhost"
+        # HTTP_HOST may carry an explicit port ("foo.example:8443"); split it
+        # off for the connect target but keep it intact for the Host header
+        # (vhost matching uses host:port verbatim).
+        if ":" in host_header:
+            host, _, port_s = host_header.partition(":")
+            try:
+                port = int(port_s)
+            except ValueError:
+                port = 443 if scheme == "https" else 80
+        else:
+            host = host_header
+            port = 443 if scheme == "https" else 80
+        if scheme == "https":
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE   # loopback -- no MITM exposure
-            conn = HTTPSConnection(self.api_host, self.api_port,
+            ctx.verify_mode = ssl.CERT_NONE   # same-origin -- no MITM risk
+            conn = HTTPSConnection(host, port,
                                    timeout=self.api_timeout_seconds,
                                    context=ctx)
         else:
-            conn = HTTPConnection(self.api_host, self.api_port,
+            conn = HTTPConnection(host, port,
                                   timeout=self.api_timeout_seconds)
         try:
             conn.request("GET", self.api_path, headers={

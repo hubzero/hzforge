@@ -115,14 +115,48 @@ def test_authenticate_calls_api_and_returns_username(
 
 def test_authenticate_forwards_host_header_from_request(
         authenticator, env, make_req, http_stub):
-    """The Host header on the API request matches the incoming request's
-    Host, so Apache routes to the same vhost."""
+    """The API request goes to the same scheme + host + port the user used
+    to reach Trac: Host header matches, AND the connect target host/port
+    match (so the same vhost serves the call)."""
     env.stage_db([])
     req = make_req(cookie="jos_session=sid")
     req.environ["HTTP_HOST"] = "help.hubzero.org"
+    req.environ["wsgi.url_scheme"] = "https"
 
     authenticator.authenticate(req)
-    assert http_stub.last_conn.calls[0]["headers"]["Host"] == "help.hubzero.org"
+    conn = http_stub.last_conn
+    assert conn.host == "help.hubzero.org"   # connect to same host
+    assert conn.port == 443                   # https default
+    assert conn.calls[0]["headers"]["Host"] == "help.hubzero.org"
+
+
+def test_authenticate_uses_http_when_request_arrived_over_http(
+        authenticator, env, make_req, http_stub):
+    """If somehow Trac sees the request as http (not https), the API call
+    also goes over http to port 80.  Honor the scheme the user actually used."""
+    env.stage_db([])
+    req = make_req(cookie="jos_session=sid")
+    req.environ["wsgi.url_scheme"] = "http"
+    req.environ["HTTP_HOST"] = "internal.lab"
+
+    authenticator.authenticate(req)
+    assert http_stub.last_conn.port == 80
+
+
+def test_authenticate_honors_explicit_port_in_host_header(
+        authenticator, env, make_req, http_stub):
+    """HTTP_HOST can carry an explicit port (e.g. 'foo:8443'); the connect
+    target uses that port, and the forwarded Host header keeps the verbatim
+    'host:port' form (Apache's vhost matching wants it that way)."""
+    env.stage_db([])
+    req = make_req(cookie="jos_session=sid")
+    req.environ["HTTP_HOST"] = "help.hubzero.org:8443"
+
+    authenticator.authenticate(req)
+    conn = http_stub.last_conn
+    assert conn.host == "help.hubzero.org"
+    assert conn.port == 8443
+    assert conn.calls[0]["headers"]["Host"] == "help.hubzero.org:8443"
 
 
 def test_authenticate_treats_403_as_anonymous(

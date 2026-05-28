@@ -58,15 +58,22 @@ closes it cleanly via the CMS logout redirect.
 
 ## Configuration
 
-All knobs live under `[hubzero_cmsauth]` in the env's `trac.ini`.
+There's deliberately **no host/port/scheme config** for the API call: the
+plugin uses the exact same scheme + host + port the browser used to reach
+Trac (read from the request's `wsgi.url_scheme` + `HTTP_HOST`). That means:
+
+- nothing to set per-env,
+- nothing that can drift between Trac and the CMS — if the user can reach
+  Trac at `https://help.hubzero.org`, the API is reachable at the same
+  origin by definition,
+- whatever Apache vhost + cert + rate-limit policy serves the user also
+  serves the API call.
+
+The remaining knobs all live under `[hubzero_cmsauth]` in `trac.ini`:
 
 | key | default | meaning |
 |---|---|---|
-| `api_host` | `127.0.0.1` | host/IP for the loopback API connection |
-| `api_port` | `443` | port for the API connection |
-| `api_vhost` | `""` (= forward incoming `Host:`) | `Host:` header sent on the API request |
 | `api_path` | `/api/v1.1/members/currentuser` | API endpoint that returns the current user's profile |
-| `use_https` | `true` | HTTPS with verify-disabled (loopback); set to false for HTTP |
 | `api_timeout_seconds` | `5` | per-request timeout for the API call |
 | `check_auth_ip` | `true` | reject `trac_auth` cookie on IP mismatch |
 | `auth_cookie_path` | `""` (= env href) | `Path` attribute for the `trac_auth` cookie |
