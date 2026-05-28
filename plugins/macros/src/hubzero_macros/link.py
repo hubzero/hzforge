@@ -37,8 +37,10 @@
 # use [[link(/report Ticket System)]].
 #
 
+from __future__ import absolute_import, division, print_function, unicode_literals
+
 from trac.wiki.macros import WikiMacroBase
-from trac.web.href import Href
+
 
 class linkMacro(WikiMacroBase):
   """Inserts internal project link."""

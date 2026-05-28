@@ -36,8 +36,10 @@
 # uploading image files to that area.  Then, include [[image name]]
 # on other wiki pages, where "name" is the name of the image file.
 #
+from __future__ import absolute_import, division, print_function, unicode_literals
+
 from trac.wiki.macros import WikiMacroBase
-from trac.web.href import Href
+
 
 class imageMacro(WikiMacroBase):
   """Inserts image."""

@@ -14,17 +14,19 @@ the `[trac.plugins]` entry-point discovery. No per-env file required.
 
 ## Status
 
-This commit is a **verbatim copy** of the upstream `image.py.in` and
-`link.py.in` from
-`gitlab.hubzero.org:hubzero-packaging-repositories/hubzero-forge`
-(`source/`). The `.in` suffix is vestigial — these were templates back when
-they used `@PROJECT@`-style substitution, but the current upstream resolves
-URLs via `self.env.abs_href()` and needs no template processing.
+Dual-target Py2.7 + Py3.11.  The upstream macro sources were already
+syntactically Py3-clean (`%`-format only, no `<>`/`iteritems`/`print`
+statement, no `ConfigParser`/`MySQLdb`), so the port is much smaller than
+`plugins/mysqlauthz/`'s — just `from __future__ import …` future imports
+for symmetry and dropping the dead `from trac.web.href import Href` (the
+`Href` was imported but never referenced).
 
-Subsequent commits will dual-target Py2.7 + Py3.11 in the same shape as
-`plugins/mysqlauthz/`. The upstream macros are already syntactically
-Py3-clean (no `<>`, no `iteritems`, no Py2 `print` statement, no `unicode`
-literal pattern), so the port is minimal.
+Iteration log:
+
+| Iter | Concern |
+|---|---|
+| `hzforge.0` | Verbatim copy of upstream `hubzero-forge/source/{image.py.in,link.py.in}`.  The `.in` suffix is vestigial — these were templates back when they used `@PROJECT@`-style substitution, but the current upstream resolves URLs via `self.env.abs_href()` and needs no template processing. |
+| `hzforge.1` | Dual-target Py2.7 + Py3.11 — `from __future__ import …` future imports, drop the unused `Href` import.  Add 7 pytest cases covering both macros' basic / already-slashed / different-env / multi-word paths.  Trac is stubbed; no real Trac install required. |
 
 ## Replaces
 
@@ -46,6 +48,16 @@ pip3 install /path/to/hzforge/plugins/macros   # Py3 hubs (Trac 1.6+) -- post-po
 
 After install, every Trac env on the host picks up both macros via the
 `[trac.plugins]` entry points — no `trac.ini` changes required.
+
+## Running the tests
+
+```sh
+cd plugins/macros
+python3.11 -m pytest          # 7 tests, ~0.1s
+```
+
+Tests use `pythonpath = ["src"]` and `testpaths = ["tests"]` in
+`pyproject.toml` to find the plugin source and discover the test files.
 
 ## Provenance
 

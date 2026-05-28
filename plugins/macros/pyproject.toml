@@ -2,14 +2,19 @@
 requires      = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# Verbatim copy of hubzero-forge's source/{image.py.in,link.py.in}.  The .in
-# suffix is vestigial -- the upstream files already resolve URLs at request
-# time via `self.env.abs_href()`, so they need no template processing and are
-# safe to install once system-wide (one wheel, every Trac env).  Subsequent
-# commits dual-target Py2.7 + Py3.11 in the same shape as plugins/mysqlauthz/.
+# Iterations:
+#   hzforge.0  verbatim copy of hubzero-forge's source/{image.py.in,link.py.in}
+#              (the `.in` suffix is vestigial -- the upstream files already
+#              resolve URLs at request time via self.env.abs_href(), no
+#              templating needed)
+#   hzforge.1  dual-target Py2.7 + Py3.11 (the upstream source was already
+#              syntactically Py3-clean -- this commit just adds the future
+#              imports + drops the dead `from trac.web.href import Href`),
+#              plus 7 pytest cases covering both macros' basic / already-
+#              slashed / different-env / multi-word paths
 [project]
 name            = "hubzero-trac-macros"
-version         = "0.1.0+hzforge.0"
+version         = "0.1.0+hzforge.1"
 description     = "HUBzero Trac wiki macros: [[image ...]] and [[link ...]]"
 readme          = "README.md"
 license         = { text = "MIT" }
@@ -42,3 +47,7 @@ Upstream = "https://gitlab.hubzero.org/hubzero-packaging-repositories/hubzero-fo
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]    # so `from hubzero_macros import image, link` resolves to src/hubzero_macros/
