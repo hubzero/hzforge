@@ -2,73 +2,14 @@
 requires      = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# Dual-target Py2.7 + Py3.11 wheel.  Iterations:
-#   hzforge.0  verbatim copy of upstream 2.2.5
-#   hzforge.1  Py3-compatibility port (import names, <> operator, future imports)
-#   hzforge.2  parameterize every cursor.execute() -- close the SQL-injection class
-#   hzforge.3  connection management rewrite: drop the HubzeroDatabaseConnection
-#              singleton in favor of per-method `with _cms_cursor()` context
-#              manager; eliminate class-level shared state (thread-safety) and
-#              the disconnect()-never-closes leak; add try/except per method;
-#              incidental cleanup of the int+str project_id log concat, the
-#              double-construct in PermissionGroupProvider.__init__, and the
-#              unreachable `if True:`/elif dead code in grant/revoke
-#   hzforge.4  fix the broken `proj`-undefined-alias query in
-#              get_permission_groups (broken since at least 2011); filter on
-#              self.project_id directly, add DISTINCT, drop the unused
-#              p.action column.  Final audit-table item resolved.
-#   hzforge.5  add tests/ -- 17 pytest cases covering the context manager
-#              (close on normal/exception exit), __init__ (existing+create
-#              paths), get_user_permissions, get_users_with_permissions
-#              (parameterized IN clause sized to len(permissions)),
-#              grant/revoke, get_permission_groups, and two regression
-#              tests locking in the hzforge.2 (parameterization) and
-#              hzforge.4 (no `proj` alias) fixes.  All 17 pass.
-[project]
-name            = "hubzero-trac-mysqlauthz"
-version         = "2.2.5+hzforge.5"
-description     = "HUBzero IPermissionStore / IPermissionGroupProvider for Trac (MySQL CMS backend)"
-readme          = "README.md"
-license         = { text = "MIT" }
-authors         = [{ name = "The Regents of the University of California" }]
-maintainers     = [{ name = "HUBzero" }]
-requires-python = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, <4"
-classifiers     = [
-    "Development Status :: 4 - Beta",
-    "Environment :: Plugins",
-    "Framework :: Trac",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 2",
-    "Programming Language :: Python :: 2.7",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-]
-dependencies    = [
-    # Trac itself spans the range we target: 1.0.x on Py2 hubs through 1.6+ on Py3 hubs.
-    "Trac>=1.0",
-    # PyMySQL replaces MySQLdb -- it works on both interpreters via env markers
-    # (the 0.10.x line is the last Py2-capable PyMySQL; 1.x is Py3-only).  Its
-    # connect() accepts MySQLdb's `passwd=`/`db=` kwarg names as aliases, so the
-    # call site doesn't need to change.
-    "PyMySQL<1.0; python_version<'3'",
-    "PyMySQL>=1.0; python_version>='3'",
-    # configparser is in the Py3 stdlib; the PyPI backport gives Py2 the same
-    # module name so `from configparser import RawConfigParser` works on both.
-    "configparser; python_version<'3'",
-]
-
-[project.entry-points."trac.plugins"]
-# Preserved exactly from hubzero-trac-mysqlauthz 2.x so the Py3 wheel drops in
-# over the existing RPM without any trac.ini change.
-"hubzeroplugin.api" = "hubzeroplugin.api"
-
-[project.urls]
-Source   = "https://github.com/hubzero/hzforge/tree/main/plugins/mysqlauthz"
-Upstream = "https://gitlab.hubzero.org/hubzero-packaging-repositories/hubzero-trac-mysqlauthz"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+# Project metadata (name, version, dependencies, entry_points, ...) lives in
+# setup.cfg -- so this package builds on Rocky 8's stock Py3.6 + setuptools 59
+# (which predates PEP 621 [project] support in pyproject.toml).
+#
+# Dual-target Py2.7 + Py3.x wheel.  This is hubzero-trac-mysqlauthz 2.4.0;
+# it supersedes upstream 2.2.5 with parameterized SQL, a connection-management
+# rewrite, the long-broken `get_permission_groups` query fix, and a 17-test
+# pytest suite.  See README.md "Iteration log" for the per-commit dev journey.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

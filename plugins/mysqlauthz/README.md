@@ -12,9 +12,12 @@ install in the Python site-packages serves every Trac env on the host.
 
 ## Status
 
-This directory is **the in-progress hzforge fork** of the upstream plugin. The
-target is a dual-target Py2.7 + Py3.11 wheel that also fixes a set of latent
-bugs surfaced during a code audit.
+This directory is the source of **`hubzero-trac-mysqlauthz` 2.4.0** — the
+hzforge release that supersedes upstream 2.2.5 with a dual-target Py2.7 +
+Py3.x wheel and a set of audit-driven fixes.  The version jump (2.2.5 → 2.4.0)
+signals real behavior change (parameterized SQL, connection-management
+rewrite, the long-broken `get_permission_groups` query), not a downstream
+patch level.
 
 | Concern | Status |
 |---|---|
@@ -29,7 +32,8 @@ bugs surfaced during a code audit.
 | `get_permission_groups` query references undefined `proj` alias | **Done** (hzforge.4) — filter on `self.project_id` directly instead of adding the `proj` join (matches every other query); also dropped the unused `p.action` column and added `DISTINCT` so multi-permission group memberships don't produce duplicate `@group` entries |
 | Unreachable `elif` branches behind `if True:` | **Done** (hzforge.3) — dead `INSERT/DELETE FROM jos_xgroups_members/_managers` branches dropped from grant/revoke |
 
-Iteration log (each commit lands one row of the audit table):
+Iteration log (the dev journey; each commit landed one row of the audit
+table.  All five iterations ship together as 2.4.0):
 
 | Iter | Concern |
 |---|---|
@@ -40,9 +44,9 @@ Iteration log (each commit lands one row of the audit table):
 | `hzforge.4` | Fix `get_permission_groups` — the query referenced an undefined `proj` alias in `WHERE`/`FROM` (broken since at least 2011).  Resolved by filtering on `self.project_id` directly (matches every other query in the plugin), with `DISTINCT` added to avoid duplicate `@group` entries and the unused `p.action` column dropped. |
 | `hzforge.5` | Add `tests/` — 17 pytest cases covering the context manager (close on normal+exception exit), `__init__` paths, `get_user_permissions`, `get_users_with_permissions` (parametrized over the IN-clause size), `grant`/`revoke`, `get_permission_groups`, plus regression tests locking in the parameterization (hzforge.2) and the `proj`-alias fix (hzforge.4).  Trac + the CMS DB are stubbed; no real Trac install or MySQL required. |
 
-**All audit-table items are now resolved.**  The plugin is ready for
-production install once the Py3 stack (Trac 1.6 under python3.11-mod_wsgi)
-is provisioned.
+**All audit-table items are resolved.**  2.4.0 is the production release;
+it installs cleanly on both Py2.7 (today's Trac 1.0.14 stack) and Py3.6+
+(in preparation for the Trac 1.6 / Py3 migration).
 
 ## Running the tests
 
