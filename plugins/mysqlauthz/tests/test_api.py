@@ -10,7 +10,6 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import pytest
 
 from hubzeroplugin import api
-from .conftest import make_store, make_group_provider
 
 
 # -----------------------------------------------------------------------------
@@ -19,9 +18,8 @@ from .conftest import make_store, make_group_provider
 # called .close()).
 # -----------------------------------------------------------------------------
 
-def test_cms_cursor_closes_connection_on_normal_exit(env, monkeypatch):
-    from .conftest import FakeConn
-    conn = FakeConn(staged_results=[])
+def test_cms_cursor_closes_connection_on_normal_exit(env, monkeypatch, fake_conn):
+    conn = fake_conn()
     monkeypatch.setattr(api, '_open_cms_connection', lambda _: conn)
     with api._cms_cursor(env) as (cursor, db):
         assert db is conn
@@ -29,9 +27,8 @@ def test_cms_cursor_closes_connection_on_normal_exit(env, monkeypatch):
     assert conn.closed is True
 
 
-def test_cms_cursor_closes_connection_on_exception(env, monkeypatch):
-    from .conftest import FakeConn
-    conn = FakeConn(staged_results=[])
+def test_cms_cursor_closes_connection_on_exception(env, monkeypatch, fake_conn):
+    conn = fake_conn()
     monkeypatch.setattr(api, '_open_cms_connection', lambda _: conn)
     with pytest.raises(RuntimeError, match="boom"):
         with api._cms_cursor(env) as (cursor, _):
@@ -76,9 +73,8 @@ def test_init_creates_project_when_missing(env, fake_db):
 # results are merged into a single set.
 # -----------------------------------------------------------------------------
 
-def test_get_user_permissions_anonymous_runs_only_the_anonymous_query(env, fake_db):
+def test_get_user_permissions_anonymous_runs_only_the_anonymous_query(fake_db, store):
     fake_db(staged_results=[[('WIKI_VIEW',), ('LOG_VIEW',)]])
-    store = make_store(env)
     perms = set(store.get_user_permissions('anonymous'))
     assert perms == {'WIKI_VIEW', 'LOG_VIEW'}
     calls = fake_db.current().cursor_obj.calls
@@ -88,23 +84,22 @@ def test_get_user_permissions_anonymous_runs_only_the_anonymous_query(env, fake_
     assert params == ('42',)               # just project_id
 
 
-def test_get_user_permissions_authenticated_merges_all_four_sources(env, fake_db):
+def test_get_user_permissions_authenticated_merges_all_four_sources(fake_db, store):
     fake_db(staged_results=[
         [('WIKI_VIEW',)],                  # anonymous
         [('TICKET_CREATE',)],              # user-direct
         [('REPORT_VIEW',)],                # via group membership
         [('TIMELINE_VIEW',)],              # via 'authenticated' group
     ])
-    store = make_store(env)
     perms = set(store.get_user_permissions('alice'))
     assert perms == {'WIKI_VIEW', 'TICKET_CREATE', 'REPORT_VIEW', 'TIMELINE_VIEW'}
     calls = fake_db.current().cursor_obj.calls
     assert len(calls) == 4                 # all four sub-queries fired
 
 
-def test_get_user_permissions_returns_empty_when_no_project_id(env, fake_db):
+def test_get_user_permissions_returns_empty_when_no_project_id(fake_db, store_factory):
     fake_db(staged_results=[[('SHOULD_NOT_BE_FETCHED',)]])
-    store = make_store(env, project_id=None)
+    store = store_factory(project_id=None)
     assert store.get_user_permissions('alice') == []
     # The connection was never opened -- nothing called .execute()
     assert fake_db.current() is None
@@ -118,10 +113,9 @@ def test_get_user_permissions_returns_empty_when_no_project_id(env, fake_db):
 # -----------------------------------------------------------------------------
 
 @pytest.mark.parametrize("n", [1, 2, 5])
-def test_get_users_with_permissions_in_clause_has_n_placeholders(env, fake_db, n):
+def test_get_users_with_permissions_in_clause_has_n_placeholders(fake_db, store, n):
     perms = ['PERM_{}'.format(i) for i in range(n)]
     fake_db(staged_results=[[('alice',)], [('bob',)]])
-    store = make_store(env)
     store.get_users_with_permissions(perms)
     calls = fake_db.current().cursor_obj.calls
     assert len(calls) == 2                 # user-direct, then via-group
@@ -136,10 +130,9 @@ def test_get_users_with_permissions_in_clause_has_n_placeholders(env, fake_db, n
 # anonymous/authenticated, @group, and regular usernames.
 # -----------------------------------------------------------------------------
 
-def test_grant_permission_anonymous_uppercase_action(env, fake_db):
+def test_grant_permission_anonymous_uppercase_action(fake_db, store):
     """anonymous -> uidNumber='0', INSERTs into jos_trac_user_permission."""
     fake_db(staged_results=[[]])           # the INSERT returns no rowset
-    store = make_store(env)
     store.grant_permission('anonymous', 'WIKI_VIEW')
     calls = fake_db.current().cursor_obj.calls
     # No SELECT for 'anonymous' -- uidNumber is hardcoded to '0'.
@@ -149,10 +142,9 @@ def test_grant_permission_anonymous_uppercase_action(env, fake_db):
     assert params == ('0', 'WIKI_VIEW', '42')
 
 
-def test_grant_permission_normal_user_uppercase_action(env, fake_db):
+def test_grant_permission_normal_user_uppercase_action(fake_db, store):
     """SELECTs the user id, then INSERTs into jos_trac_user_permission."""
     fake_db(staged_results=[[(101,)], []])
-    store = make_store(env)
     store.grant_permission('alice', 'WIKI_VIEW')
     calls = fake_db.current().cursor_obj.calls
     assert len(calls) == 2
@@ -164,10 +156,9 @@ def test_grant_permission_normal_user_uppercase_action(env, fake_db):
     assert ins_params == ('101', 'WIKI_VIEW', '42')
 
 
-def test_revoke_permission_authenticated_uppercase_action(env, fake_db):
+def test_revoke_permission_authenticated_uppercase_action(fake_db, store):
     """authenticated -> gidNumber='0', DELETEs from jos_trac_group_permission."""
     fake_db(staged_results=[[]])
-    store = make_store(env)
     store.revoke_permission('authenticated', 'WIKI_VIEW')
     calls = fake_db.current().cursor_obj.calls
     assert len(calls) == 1
@@ -181,17 +172,15 @@ def test_revoke_permission_authenticated_uppercase_action(env, fake_db):
 # HubzeroPermissionGroupProvider.get_permission_groups
 # -----------------------------------------------------------------------------
 
-def test_get_permission_groups_anonymous_returns_only_anonymous(env, fake_db):
+def test_get_permission_groups_anonymous_returns_only_anonymous(fake_db, group_provider):
     fake_db(staged_results=[[('@should_not_appear',)]])
-    p = make_group_provider(env)
-    assert p.get_permission_groups('anonymous') == ['anonymous']
+    assert group_provider.get_permission_groups('anonymous') == ['anonymous']
     assert fake_db.current() is None       # no DB call for anonymous
 
 
-def test_get_permission_groups_authenticated_returns_groups(env, fake_db):
+def test_get_permission_groups_authenticated_returns_groups(fake_db, group_provider):
     fake_db(staged_results=[[('staff',), ('admins',)]])
-    p = make_group_provider(env)
-    assert p.get_permission_groups('alice') == [
+    assert group_provider.get_permission_groups('alice') == [
         'anonymous', 'authenticated', '@staff', '@admins',
     ]
 
@@ -202,10 +191,9 @@ def test_get_permission_groups_authenticated_returns_groups(env, fake_db):
 # alias.  Lock it in by asserting the fixed SQL does NOT reference `proj.*`.
 # -----------------------------------------------------------------------------
 
-def test_get_permission_groups_query_does_not_reference_undefined_proj_alias(env, fake_db):
+def test_get_permission_groups_query_does_not_reference_undefined_proj_alias(fake_db, group_provider):
     fake_db(staged_results=[[]])
-    p = make_group_provider(env)
-    p.get_permission_groups('alice')
+    group_provider.get_permission_groups('alice')
     sql, params = fake_db.current().cursor_obj.calls[0]
     assert 'proj.name' not in sql          # the 2011 bug
     assert 'proj.id'   not in sql
@@ -219,12 +207,11 @@ def test_get_permission_groups_query_does_not_reference_undefined_proj_alias(env
 # concatenated query and assert the value comes through as a parameter.
 # -----------------------------------------------------------------------------
 
-def test_user_lookup_passes_value_as_parameter_not_concatenated(env, fake_db):
+def test_user_lookup_passes_value_as_parameter_not_concatenated(fake_db, store):
     """If concatenation regressed, the apostrophe would either crash MySQL or
     open an injection vector.  Parameterized: the value lands in params."""
     evil = "x'; DROP TABLE jos_users; --"
     fake_db(staged_results=[[]])           # SELECT returns no row
-    store = make_store(env)
     store.grant_permission(evil, 'WIKI_VIEW')
     sel_sql, sel_params = fake_db.current().cursor_obj.calls[0]
     # SQL has a placeholder, not the value:

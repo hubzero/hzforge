@@ -13,8 +13,16 @@ call and serves staged result rows in order.  No real MySQL is required.
 """
 from __future__ import absolute_import, division, print_function, unicode_literals
 
+import pathlib
 import sys
 import types
+
+
+# --- src/ on sys.path (so the plugin source is importable regardless of
+# pytest's rootdir -- works whether pytest is invoked from this plugin's
+# directory or from the repo root with multiple test paths). ---
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'src'))
 
 
 # --- Trac stubs (must run before any test imports hubzeroplugin.api) ---
@@ -106,6 +114,17 @@ class FakeConn(object):
 
 
 @pytest.fixture
+def fake_conn():
+    """A factory: `fake_conn(staged_results=[], insert_id_value=1)` -> FakeConn.
+    For tests that drive the connection directly (e.g. the _cms_cursor
+    context-manager tests).  Most tests use `fake_db` instead, which also
+    monkeypatches `_open_cms_connection` to return a FakeConn."""
+    def make(staged_results=(), insert_id_value=1):
+        return FakeConn(list(staged_results), insert_id_value)
+    return make
+
+
+@pytest.fixture
 def fake_db(monkeypatch):
     """Returns a callable.  Use as:
 
@@ -134,24 +153,36 @@ def fake_db(monkeypatch):
     return install
 
 
-# --- helpers for instantiating Trac Components in tests ---
+# --- fixtures for instantiating Trac Components without Trac's framework ---
 
-def make_store(env, project_id='42'):
-    """HubzeroPermissionStore with project_id pre-set, bypassing __init__'s
-    own DB lookup -- so tests of the other methods don't have to seed it."""
-    from hubzeroplugin import api
-    s = api.HubzeroPermissionStore.__new__(api.HubzeroPermissionStore)
-    s.env = env
-    s.project = env.config.get('project', 'name')
-    s.project_id = project_id
-    return s
+@pytest.fixture
+def store_factory(env):
+    """A factory that builds a HubzeroPermissionStore with project_id pre-set,
+    bypassing __init__'s own DB lookup so tests of the other methods don't
+    have to seed it.  Tests that need to override the default project_id use
+    this fixture; tests that just want the common case use `store` below."""
+    def make(project_id='42'):
+        from hubzeroplugin import api
+        s = api.HubzeroPermissionStore.__new__(api.HubzeroPermissionStore)
+        s.env = env
+        s.project = env.config.get('project', 'name')
+        s.project_id = project_id
+        return s
+    return make
 
 
-def make_group_provider(env, project_id='42'):
+@pytest.fixture
+def store(store_factory):
+    """The common case: HubzeroPermissionStore with project_id='42'."""
+    return store_factory()
+
+
+@pytest.fixture
+def group_provider(env):
     """HubzeroPermissionGroupProvider with project_id pre-set."""
     from hubzeroplugin import api
     p = api.HubzeroPermissionGroupProvider.__new__(api.HubzeroPermissionGroupProvider)
     p.env = env
     p.project = env.config.get('project', 'name')
-    p.project_id = project_id
+    p.project_id = '42'
     return p
