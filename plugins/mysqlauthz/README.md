@@ -23,11 +23,11 @@ bugs surfaced during a code audit.
 | `import ConfigParser` (Py2 module name) | **Done** (hzforge.1) — `from configparser import RawConfigParser` |
 | `<>` not-equal operator (Py2-only) | **Done** (hzforge.1) — 8 sites converted (`is not None` for `None`, `!=` for string compares) |
 | SQL string concatenation (injection class) | **Done** (hzforge.2) — every `cursor.execute()` parameterized; PyMySQL handles quoting/type conversion driver-side |
-| Class-level `db`/`dbcursor` (thread-unsafe singleton) | Pending — make per-instance, `with closing(self.db.cursor()) as cur:` |
-| `disconnect()` never closes the connection | Pending — actually `.close()` it |
-| `__init__` log of `int + str` (`self.project_id` typo) | Pending — coerce with `str()` |
+| Class-level `db`/`dbcursor` (thread-unsafe singleton) | **Done** (hzforge.3) — replaced by per-method `with _cms_cursor(self.env)` context manager; each call opens its own connection |
+| `disconnect()` never closes the connection | **Done** (hzforge.3) — `with` block actually closes the connection on exit |
+| `__init__` log of `int + str` (`self.project_id` typo) | **Done** (hzforge.3) — `str(db.insert_id())` plus lazy `%s` log format |
 | `get_permission_groups` query references undefined `proj` alias | Pending — add `jos_trac_project AS proj` to FROM |
-| Unreachable `elif` branches behind `if True:` | Pending — delete or gate explicitly |
+| Unreachable `elif` branches behind `if True:` | **Done** (hzforge.3) — dead `INSERT/DELETE FROM jos_xgroups_members/_managers` branches dropped from grant/revoke |
 
 Iteration log (each commit lands one row of the audit table):
 
@@ -36,11 +36,10 @@ Iteration log (each commit lands one row of the audit table):
 | `hzforge.0` | Verbatim copy of upstream `hubzero-trac-mysqlauthz-2.2.5-1.el8` |
 | `hzforge.1` | Py3 compatibility — `import` names, `<>` operator, future imports |
 | `hzforge.2` | Parameterize every `cursor.execute()` — closes the SQL-injection class |
+| `hzforge.3` | Connection management rewrite — drop the `HubzeroDatabaseConnection` singleton in favor of `with _cms_cursor()`; eliminates the thread-unsafe class-level state and the `disconnect()` connection leak.  Incidentally also fixes the `int + str` log concat in `__init__`, the double-construct in `PermissionGroupProvider.__init__`, and removes the unreachable `if True:`/elif dead code in `grant_permission`/`revoke_permission`. |
 
-The latent bugs in the table above (class-level connection state,
-`disconnect()` never closing, `project_id` int+str log concat, the `proj`
-undefined alias, unreachable `if True:` elif branches) land in
-`hzforge.3`+ so each commit's diff cleanly shows its own concern.
+The one remaining audit item — the `proj`-undefined alias in
+`get_permission_groups` — lands in `hzforge.4`.
 
 ## Provenance
 

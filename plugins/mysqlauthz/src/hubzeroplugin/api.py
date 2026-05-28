@@ -32,6 +32,7 @@
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 
+import contextlib
 import re
 
 # Py3 stdlib or Py2 PyPI backport (declared in pyproject.toml).
@@ -51,82 +52,56 @@ __all__ = ['IPermissionStore', 'IPermissionGroupProvider']
 
 HUBZERO_MODULE_CONFIG = [ 'enable', 'project', 'hzdb_host', 'hzdb_user', 'hzdb_password', 'hzdb_db' ]
 
-class HubzeroDatabaseConnection(object):
-    """Hubzero Database Connection"""
+def _open_cms_connection(env):
+    """Open a fresh MySQL connection to the HUBzero CMS DB.  Caller owns the
+    returned connection and must close() it -- use `with contextlib.closing(...)`
+    or the `_cms_cursor()` context manager below.
 
-    db = False
-    dbcursor = False
+    Connection params come from /etc/hubzero.conf (which points at the hub's
+    docroot) + <docroot>/configuration.php (PHP source, regex-parsed for
+    `var/public $name = value;` lines, then poked into env.config['hubzero']).
+    """
+    config = RawConfigParser()
+    config.read('/etc/hubzero.conf')
+    section = config.get('DEFAULT', 'site')
+    docroot = config.get(section, 'DocumentRoot')
+    with open(docroot + '/configuration.php', 'r') as fp:
+        contents = fp.read()
+    for m in re.finditer(r"\s*(?:var|public)\s+\$([a-zA-Z-_0-9]+)\s*=\s*(.+)\s*;", contents):
+        env.config.set('hubzero', m.group(1), m.group(2).strip(" \'\"\t"))
+    return MySQLdb.connect(
+        host       = env.config.get('hubzero', 'hzdb_host',     env.config.get('hubzero', 'host',     'localhost')),
+        user       = env.config.get('hubzero', 'hzdb_user',     env.config.get('hubzero', 'user',     'hubzero')),
+        passwd     = env.config.get('hubzero', 'hzdb_password', env.config.get('hubzero', 'password', '')),
+        db         = env.config.get('hubzero', 'hzdb_db',       env.config.get('hubzero', 'db',       'hubzero')),
+        autocommit = True,
+    )
 
-    def __init__(self,env):
-      env.log.debug('HubzeroDatabaseConnection::__init__() start')
-      self.env = env
-      self.connect()
-      env.log.debug('HubzeroDatabaseConnection::__init__() end')
 
-    def __del__(self):
-      self.env.log.debug('HubzeroDatabaseConnection::__del__() start')
-      self.disconnect()
-      self.env.log.debug('HubzeroDatabaseConnection::__del__() end')
+@contextlib.contextmanager
+def _cms_cursor(env):
+    """Yield (cursor, connection) for a fresh CMS DB connection, closing both
+    on exit -- normal completion, exception, or generator close.  Use as::
 
-    def connect(self):
-      self.env.log.debug('HubzeroDatabaseConnection::connect() start')
-      if (self.__class__.db):
-        self.env.log.debug('HubzeroDatabaseConnection::connect() already connected. end')
-        return 1
+        with _cms_cursor(self.env) as (cursor, db):
+            cursor.execute(...)
 
-      config = RawConfigParser()
-      config.read('/etc/hubzero.conf')
-      section = config.get('DEFAULT','site')
-      docroot = config.get(section, 'DocumentRoot')
-      file_read = open(docroot + '/configuration.php',"r")
-      contents = file_read.read()
-      file_read.close() 
-      for m in re.finditer("\s*(?:var|public)\s+\$([a-zA-Z-_0-9]+)\s*=\s*(.+)\s*;", contents):
-        self.env.config.set('hubzero',m.group(1),m.group(2).strip(" \'\"\t"))
-
-      mysql_host = self.env.config.get('hubzero', 'hzdb_host', self.env.config.get('hubzero', 'host', 'localhost'))
-      mysql_user = self.env.config.get('hubzero', 'hzdb_user', self.env.config.get('hubzero', 'user', 'hubzero'))
-      mysql_password = self.env.config.get('hubzero', 'hzdb_password', self.env.config.get('hubzero', 'password', ''))
-      mysql_db = self.env.config.get('hubzero', 'hzdb_db', self.env.config.get('hubzero','db', 'hubzero'))
-        
-      try:
-        self.__class__.db = MySQLdb.connect(host=mysql_host, user=mysql_user, passwd=mysql_password, db=mysql_db)
-      except:
-        self.env.log.error('HubzeroDatabaseConnection::connect() Failed: host %s user %s password XXXXX db %s' % (mysql_host, mysql_user, mysql_db))
-        self.env.log.debug('HubzeroDatabaseConnection::connect() end')
-        return 0
-
-      self.env.log.debug('HubzeroDatabaseConnection::connect() end')
-      return 1
-
-    def cursor(self):
-      self.env.log.debug('HubzeroDatabaseConnection::cursor() start')
-      if not self.__class__.db:
-        if not self.connect():
-          self.env.log.debug('HubzeroDatabaseConnection::cursor() connection failed. end')
-          return None
-
-      if self.__class__.dbcursor:
-        self.env.log.debug('HubzeroDatabaseConnection::cursor() already have cursor')
-      else:
-        self.env.log.debug('HubzeroDatabaseConnection::cursor() getting cursor from db')
-        self.__class__.dbcursor = self.__class__.db.cursor()
-
-        if not self.__class__.dbcursor:
-          self.env.log.error('HubzeroDatabaseConnection::cursor() Failed to create datanase cursor. end')
-          self.__class__.dbcursor = False
-
-      self.env.log.debug('HubzeroDatabaseConnection::cursor() end')
-      return self.__class__.dbcursor
-
-    def disconnect(self):
-      self.env.log.debug('HubzeroDatabaseConnection::disconnect() start')
-      self.__class__.dbcursor = None
-      self.__class__.db = None
-      self.env.log.debug('HubzeroDatabaseConnection::disconnect() end')
-
-    def insert_id(self):
-      return self.__class__.db.insert_id()
+    Each call opens its OWN connection, so multiple threads (the mod_wsgi
+    daemon runs `processes=2 threads=15`) cannot race on shared state.  This
+    replaces the previous HubzeroDatabaseConnection class, whose `db` and
+    `dbcursor` were class attributes (every instance, every thread, all
+    sharing one connection) and whose `disconnect()` only nulled the
+    references without actually calling `.close()` (leaked connections).
+    """
+    db = _open_cms_connection(env)
+    try:
+        cursor = db.cursor()
+        try:
+            yield cursor, db
+        finally:
+            cursor.close()
+    finally:
+        db.close()
 
 class HubzeroPermissionStore(Component):
     """HUBzero implementation of permission storage and limited group management.
@@ -140,33 +115,26 @@ class HubzeroPermissionStore(Component):
 
     def __init__(self):
         self.env.log.debug('HubzeroPermissionStore::__init__() start')
-        self.db = HubzeroDatabaseConnection(self.env)
         self.project = self.env.config.get('project', 'name')
+        self.project_id = None
+        try:
+            with _cms_cursor(self.env) as (cursor, db):
+                cursor.execute('SELECT id FROM jos_trac_project WHERE name=%s', (self.project,))
+                row = cursor.fetchone()
+                if row:
+                    self.project_id = str(row[0])
+                else:
+                    cursor.execute('INSERT IGNORE INTO jos_trac_project (name) VALUE (%s);', (self.project,))
+                    # str() so the project_id type is consistent with the
+                    # row-fetched branch above (it was an int before -- which
+                    # crashed the `'...' + self.project_id + '...'` log below).
+                    self.project_id = str(db.insert_id())
+        except Exception:
+            self.env.log.exception('HubzeroPermissionStore::__init__() failed')
+        self.env.log.debug('HubzeroPermissionStore::__init__(): project_id=%s end', self.project_id)
 
-        cursor = self.db.cursor()
-
-        if not cursor:
-          self.project_id = None
-          self.db = None
-          self.env.log.debug('HubzeroPermissionStore::__init__() no database cursor.')
-        else:
-          self.env.log.debug('HubzeroPermissionStore::__init__(): SELECT id FROM jos_trac_project WHERE name=%s', self.project)
-          cursor.execute('SELECT id FROM jos_trac_project WHERE name=%s', (self.project,))
-          row = cursor.fetchone()
-
-          if row:
-            self.project_id = str(row[0])
-          else:
-            self.env.log.debug('HubzeroPermissionStore::__init__(): INSERT IGNORE INTO jos_trac_project (name) VALUE (%s);', self.project)
-            cursor.execute('INSERT IGNORE INTO jos_trac_project (name) VALUE (%s);', (self.project,))
-            self.project_id = self.db.insert_id()
-
-        self.env.log.debug('HubzeroPermissionStore::__init__(): ' + self.project_id + ' : end')
-
-    def __del__(self):
-      self.env.log.debug('HubzeroPermissionStore::__del__() start')
-      self.db = None
-      self.env.log.debug('HubzeroPermissionStore::__del__() end')
+    # No __del__ -- nothing to clean up.  Each method opens & closes its own
+    # CMS connection via _cms_cursor(); there is no instance-held DB state.
 
     def get_user_permissions(self, username):
         """Retrieve the permissions for the given user and return them in a
@@ -176,57 +144,45 @@ class HubzeroPermissionStore(Component):
         #__trac_group_permission, group membership is stored in #__xgroups_members
         """
 
-        self.env.log.debug('HubzeroPermissionStore::get_user_permission(' + username + ') start')
-        
-        actions = set([])
+        self.env.log.debug('HubzeroPermissionStore::get_user_permission(%s) start', username)
+        actions = set()
+        if self.project_id is None:
+            return list(actions)
+        try:
+            with _cms_cursor(self.env) as (cursor, _db):
+                # permissions for anonymous users
+                cursor.execute('SELECT DISTINCT(p.action) FROM jos_trac_user_permission AS p '
+                               'WHERE p.user_id=0 AND p.trac_project_id=%s',
+                               (self.project_id,))
+                for action, in cursor.fetchall():
+                    actions.add(action)
 
-        cursor = self.db.cursor()
+                if username != 'anonymous':
+                    # permissions for the authenticated user
+                    cursor.execute('SELECT DISTINCT(p.action) FROM jos_users AS j, jos_trac_user_permission AS p '
+                                   'WHERE j.id = p.user_id AND j.username = %s AND p.trac_project_id=%s',
+                                   (username, self.project_id))
+                    for action, in cursor.fetchall():
+                        actions.add(action)
 
-        if not cursor:
-          self.env.log.debug('HubzeroPermissionStore::get_user_permission(' + username + ') no database cursor. end')
-          self.db.disconnect()
-          return list(actions)
+                    # permissions from group memberships
+                    cursor.execute('SELECT DISTINCT(p.action) FROM jos_xgroups_members AS xgm, '
+                                   'jos_trac_group_permission AS p, jos_users AS j '
+                                   'WHERE xgm.uidNumber = j.id AND j.username = %s '
+                                   'AND xgm.gidNumber = p.group_id AND p.trac_project_id=%s',
+                                   (username, self.project_id))
+                    for action, in cursor.fetchall():
+                        actions.add(action)
 
-        if self.project_id == None:
-          self.env.log.debug('HubzeroPermissionStore::get_user_permission(' + username + ') no project_id. end')
-          self.db.disconnect()
-          return list(actions)
-
-        # permissions for anonymous users
-        self.env.log.debug('SELECT DISTINCT(p.action) FROM jos_trac_user_permission AS p WHERE p.user_id=0 AND p.trac_project_id=%s', self.project_id)
-        cursor.execute('SELECT DISTINCT(p.action) FROM jos_trac_user_permission AS p WHERE p.user_id=0 AND p.trac_project_id=%s', (self.project_id,))
-        rows = cursor.fetchall()
-        for action, in rows:
-          self.env.log.debug('HubzeroPermissionStore::get_user_permission(): adding [anonymous] permission ' + action)
-          actions.add(action)
-
-        # permissions for authenticated users
-        if username != 'anonymous':
-          self.env.log.debug('SELECT DISTINCT(p.action) FROM jos_users AS j, jos_trac_user_permission AS p WHERE j.id = p.user_id AND j.username = %s AND p.trac_project_id=%s', username, self.project_id)
-          cursor.execute('SELECT DISTINCT(p.action) FROM jos_users AS j, jos_trac_user_permission AS p WHERE j.id = p.user_id AND j.username = %s AND p.trac_project_id=%s', (username, self.project_id))
-          rows = cursor.fetchall()
-          for action, in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_user_permission(): adding [' + username + '] permission ' + action)
-            actions.add(action)
-
-          # permissions from group memberships
-          self.env.log.debug('SELECT DISTINCT(p.action) FROM jos_xgroups_members AS xgm, jos_trac_group_permission AS p, jos_users AS j WHERE xgm.uidNumber = j.id AND j.username = %s AND xgm.gidNumber = p.group_id AND p.trac_project_id=%s', username, self.project_id);
-          cursor.execute('SELECT DISTINCT(p.action) FROM jos_xgroups_members AS xgm, jos_trac_group_permission AS p, jos_users AS j WHERE xgm.uidNumber = j.id AND j.username = %s AND xgm.gidNumber = p.group_id AND p.trac_project_id=%s', (username, self.project_id));
-          rows = cursor.fetchall()
-          for action, in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_user_permission(): adding [group granted] permission ' + action)
-            actions.add(action)
-
-          # permissions from special 'authenticated' group
-          self.env.log.debug('SELECT DISTINCT(p.action) FROM jos_trac_group_permission AS p WHERE p.group_id = 0 AND p.trac_project_id=%s', self.project_id);
-          cursor.execute('SELECT DISTINCT(p.action) FROM jos_trac_group_permission AS p WHERE p.group_id = 0 AND p.trac_project_id=%s', (self.project_id,));
-          rows = cursor.fetchall()
-          for action, in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_user_permission(): adding [authenticated] permission ' + action)
-            actions.add(action)
-
-        self.env.log.debug('HubzeroPermissionStore::get_user_permission(' + username + ') end')
-        self.db.disconnect()
+                    # permissions from the special 'authenticated' group
+                    cursor.execute('SELECT DISTINCT(p.action) FROM jos_trac_group_permission AS p '
+                                   'WHERE p.group_id = 0 AND p.trac_project_id=%s',
+                                   (self.project_id,))
+                    for action, in cursor.fetchall():
+                        actions.add(action)
+        except Exception:
+            self.env.log.exception('HubzeroPermissionStore::get_user_permission(%r) failed', username)
+        self.env.log.debug('HubzeroPermissionStore::get_user_permission(%s) end', username)
         return list(actions)
 
     def get_users_with_permissions(self, permissions):
@@ -236,57 +192,37 @@ class HubzeroPermissionStore(Component):
         """
       
         self.env.log.debug('HubzeroPermissionStore::get_users_with_permission() start')
-
         result = set()
-
-        cursor = self.db.cursor()
-
-        if not cursor:
-          self.env.log.debug('HubzeroPermissionStore::get_users_with_permission() failed to get db cursor. end')
-          self.db.disconnect()
-          return list(result)
-
-        if self.project_id == None:
-          self.env.log.debug('HubzeroPermissionStore::get_user_with_permissions() no project_id. end')
-          self.db.disconnect()
-          return list(result)
-
-        groups = set()
-        # Dynamic IN-clause: one %s placeholder per permission, then the
-        # project_id appended.  The list is passed to cursor.execute() as a
-        # single parameter tuple so the driver does the quoting.
+        if self.project_id is None:
+            return list(result)
+        # Dynamic IN-clause: one %s per permission, then the project_id
+        # appended.  Passed as a single parameter tuple so the driver does
+        # the quoting.
         permissions = list(permissions)
         placeholders = ','.join(['%s'] * len(permissions))
         params = tuple(permissions) + (self.project_id,)
+        try:
+            with _cms_cursor(self.env) as (cursor, _db):
+                # user records with these permissions
+                sql_user = ('SELECT DISTINCT(j.username) FROM jos_users AS j, jos_trac_user_permission AS p '
+                            'WHERE j.id=p.user_id AND p.action IN ({}) AND p.trac_project_id=%s'
+                            .format(placeholders))
+                cursor.execute(sql_user, params)
+                for username, in cursor.fetchall():
+                    result.add(username)
 
-        self.env.log.debug('HubzeroPermissionStore::get_users_with_permissions(): %r', permissions)
-
-        # user records with these permissions
-        sql_user = ('SELECT DISTINCT(j.username) FROM jos_users AS j, jos_trac_user_permission AS p '
-                    'WHERE j.id=p.user_id AND p.action IN ({}) AND p.trac_project_id=%s'
-                    .format(placeholders))
-        self.env.log.debug('HubzeroPermissionStore::get_users_with_permission(): %s  %r', sql_user, params)
-        cursor.execute(sql_user, params)
-        rows = cursor.fetchall()
-        for username, in rows:
-          self.env.log.debug('HubzeroPermissionStore::get_users_with_permissions(): adding user ' + username)
-          result.add(username)
-
-        # user records in groups with any of these permissions
-        sql_group = ('SELECT DISTINCT(u.username) FROM jos_users AS u,jos_xgroups_members AS xgm, '
-                     'jos_xgroups AS xg, jos_trac_group_permission AS p '
-                     'WHERE xgm.gidNumber=p.group_id AND xg.gidNumber = p.group_id '
-                     'AND u.id=xgm.uidNumber AND p.action IN ({}) AND p.trac_project_id = %s'
-                     .format(placeholders))
-        self.env.log.debug('HubzeroPermissionStore::get_users_with_permission(): %s  %r', sql_group, params)
-        cursor.execute(sql_group, params)
-        rows = cursor.fetchall()
-        for username, in rows:
-          self.env.log.debug('HubzeroPermissionStore::get_users_with_permissions(): adding user [via group]' + username)
-          result.add(username)
-
+                # user records in groups with any of these permissions
+                sql_group = ('SELECT DISTINCT(u.username) FROM jos_users AS u,jos_xgroups_members AS xgm, '
+                             'jos_xgroups AS xg, jos_trac_group_permission AS p '
+                             'WHERE xgm.gidNumber=p.group_id AND xg.gidNumber = p.group_id '
+                             'AND u.id=xgm.uidNumber AND p.action IN ({}) AND p.trac_project_id = %s'
+                             .format(placeholders))
+                cursor.execute(sql_group, params)
+                for username, in cursor.fetchall():
+                    result.add(username)
+        except Exception:
+            self.env.log.exception('HubzeroPermissionStore::get_users_with_permission(%r) failed', permissions)
         self.env.log.debug('HubzeroPermissionStore::get_users_with_permission() end')
-        self.db.disconnect()
         return list(result)
 
     def get_all_permissions(self):
@@ -295,214 +231,170 @@ class HubzeroPermissionStore(Component):
         The permissions are returned as a list of (subject, action)
         formatted tuples."""
 
-        self.env.log.debug('HubzeroPermissionStore::get_all_permissions() for project ' + str(self.project) + ' start')
-
+        self.env.log.debug('HubzeroPermissionStore::get_all_permissions() for project %s start', self.project)
         perms = []
+        if self.project_id is None:
+            return perms
+        try:
+            with _cms_cursor(self.env) as (cursor, _db):
+                # one row per (user, action) -- explicit users
+                cursor.execute('SELECT j.username,p.action FROM jos_users AS j, jos_trac_user_permission AS p '
+                               'WHERE j.id = p.user_id AND p.trac_project_id = %s',
+                               (self.project_id,))
+                perms.extend((u, a) for u, a in cursor.fetchall())
 
-        cursor = self.db.cursor()
+                # ... plus the special 'anonymous' user (user_id=0)
+                cursor.execute("SELECT 'anonymous',p.action FROM jos_trac_user_permission AS p "
+                               "WHERE p.user_id = '0' AND p.trac_project_id = %s",
+                               (self.project_id,))
+                perms.extend((u, a) for u, a in cursor.fetchall())
 
-        if not cursor:
-          self.env.log.debug('HubzeroPermissionStore::get_all_permissions() for project ' + str(self.project) + ' no database cursor. end')
-          self.db.disconnect()
-          return perms
- 
-        if self.project_id == None:
-          self.env.log.debug('HubzeroPermissionStore::get_all_permissions() no project_id. end')
-          self.db.disconnect()
-          return perms
+                # one row per (@group, action)
+                cursor.execute('SELECT xg.cn,p.action FROM jos_xgroups AS xg, jos_trac_group_permission AS p '
+                               'WHERE xg.gidNumber = p.group_id AND p.trac_project_id = %s',
+                               (self.project_id,))
+                perms.extend(('@' + g, a) for g, a in cursor.fetchall())
 
-        # get permission list for each user
-        self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): SELECT j.username,p.action FROM jos_users AS j, jos_trac_user_permission AS p WHERE j.id = p.user_id AND p.trac_project_id = %s', self.project_id)
-        cursor.execute('SELECT j.username,p.action FROM jos_users AS j, jos_trac_user_permission AS p WHERE j.id = p.user_id AND p.trac_project_id = %s', (self.project_id,))
-        rows = cursor.fetchall()
-        for username,action in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): adding user permission (' + username + ',' + action + ')')
-            perms.append((username,action))
+                # one row per (user, @group) -- group memberships, expressed
+                # as if the @group itself were a "permission"
+                cursor.execute('SELECT g.cn,u.username FROM jos_xgroups AS g, jos_xgroups_members AS gm, '
+                               'jos_trac_group_permission AS p, jos_users AS u '
+                               'WHERE u.id=gm.uidNumber AND g.gidNumber = p.group_id '
+                               'AND g.gidNumber=gm.gidNumber AND p.trac_project_id = %s',
+                               (self.project_id,))
+                perms.extend((u, '@' + g) for g, u in cursor.fetchall())
 
-        # get permission list for special anonymous user
-        self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): SELECT \'anonymous\',p.action FROM jos_trac_user_permission AS p WHERE p.user_id = \'0\' AND p.trac_project_id = %s', self.project_id)
-        cursor.execute('SELECT \'anonymous\',p.action FROM jos_trac_user_permission AS p WHERE p.user_id = \'0\' AND p.trac_project_id = %s', (self.project_id,))
-        rows = cursor.fetchall()
-        for username,action in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): adding user permission (' + username + ',' + action + ')')
-            perms.append((username,action))
-
-        # get permission list for each group
-        self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): SELECT xg.cn,p.action FROM jos_xgroups AS xg, jos_trac_group_permission AS p WHERE xg.gidNumber = p.group_id AND p.trac_project_id = %s', self.project_id)
-        cursor.execute('SELECT xg.cn,p.action FROM jos_xgroups AS xg, jos_trac_group_permission AS p WHERE  xg.gidNumber = p.group_id AND p.trac_project_id = %s', (self.project_id,))
-        rows = cursor.fetchall()
-        for groupname,action in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): adding group permission (@' + groupname + ',' + action + ')')
-            perms.append(('@'+groupname,action))
-
-        # get member list for each group
-        self.env.log.debug('SELECT g.cn,u.username FROM jos_xgroups AS g, jos_xgroups_members AS gm, jos_trac_group_permission AS p, jos_users AS u WHERE u.id=gm.uidNumber AND g.gidNumber = p.group_id AND g.gidNumber=gm.gidNumber AND p.trac_project_id = %s', self.project_id)
-        cursor.execute('SELECT g.cn,u.username FROM jos_xgroups AS g, jos_xgroups_members AS gm, jos_trac_group_permission AS p, jos_users AS u WHERE u.id=gm.uidNumber AND g.gidNumber = p.group_id AND g.gidNumber=gm.gidNumber AND p.trac_project_id = %s', (self.project_id,))
-        rows = cursor.fetchall()
-        for groupname,username in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): adding group membership (' + username + ', @' + groupname + ')')
-            perms.append((username,'@'+groupname))
-
-        # get permission list for special authenticated group
-        self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): SELECT \'authenticated\',p.action FROM jos_trac_group_permission AS p WHERE p.group_id = \'0\' AND p.trac_project_id = %s', self.project_id)
-        cursor.execute('SELECT \'authenticated\',p.action FROM jos_trac_group_permission AS p WHERE  p.group_id = \'0\' AND p.trac_project_id = %s', (self.project_id,))
-        rows = cursor.fetchall()
-        for groupname,action in rows:
-            self.env.log.debug('HubzeroPermissionStore::get_all_permissions(): adding group permission (' + groupname + ',' + action + ')')
-            perms.append((groupname,action))
-
-        self.env.log.debug('HubzeroPermissionStore::get_all_permissions() for project ' + str(self.project) + ' end')
-        self.db.disconnect()
+                # ... plus the special 'authenticated' group (group_id=0)
+                cursor.execute("SELECT 'authenticated',p.action FROM jos_trac_group_permission AS p "
+                               "WHERE p.group_id = '0' AND p.trac_project_id = %s",
+                               (self.project_id,))
+                perms.extend((g, a) for g, a in cursor.fetchall())
+        except Exception:
+            self.env.log.exception('HubzeroPermissionStore::get_all_permissions() failed')
+        self.env.log.debug('HubzeroPermissionStore::get_all_permissions() for project %s end', self.project)
         return perms
 
     def grant_permission(self, username, action):
         """Grants a user the permission to perform the specified action."""
-        self.env.log.debug('HubzeroPermissionStore::grant_permission() start')
+        self.env.log.debug('HubzeroPermissionStore::grant_permission(%s, %s) start', username, action)
+        try:
+            with _cms_cursor(self.env) as (cursor, _db):
+                uidNumber = None
+                gidNumber = None
+                if action.isupper():
+                    if username == 'anonymous':
+                        uidNumber = '0'
+                    elif username == 'authenticated':
+                        gidNumber = '0'
+                    elif username.startswith('@'):
+                        username = username[1:]
+                        cursor.execute('SELECT gidNumber from jos_xgroups WHERE cn=%s', (username,))
+                        row = cursor.fetchone()
+                        if row:
+                            gidNumber = str(row[0])
+                    else:
+                        cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
+                        row = cursor.fetchone()
+                        if row:
+                            uidNumber = str(row[0])
 
-        cursor = self.db.cursor()
+                    if uidNumber is not None:
+                        cursor.execute('INSERT IGNORE INTO jos_trac_user_permission (user_id,action,trac_project_id) VALUE (%s,%s,%s);',
+                                       (uidNumber, action, self.project_id))
+                    if gidNumber is not None:
+                        cursor.execute('INSERT IGNORE INTO jos_trac_group_permission (group_id,action,trac_project_id) VALUE (%s,%s,%s);',
+                                       (gidNumber, action, self.project_id))
+                else:
+                    if username and username != 'anonymous' and username != 'authenticated':
+                        cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
+                        row = cursor.fetchone()
+                        if row:
+                            uidNumber = str(row[0])
 
-        if not cursor:
-          self.env.log.debug('HubzeroPermissionStore::grant_permission() no database cursor. end')
-          self.db.disconnect()
-          return
+                        if action.startswith('@'):
+                            action = action[1:]
+                            cursor.execute('SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, '
+                                           'jos_trac_project AS proj, jos_tool AS t '
+                                           "WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid "
+                                           "AND CONCAT('app:',t.toolname)=proj.name "
+                                           'AND proj.id=%s AND g.cn=%s',
+                                           (self.project_id, action))
+                            row = cursor.fetchone()
+                            if row:
+                                gidNumber = str(row[0])
 
-        uidNumber = None
-        gidNumber = None
-
-        if action.isupper():
-          if username == 'anonymous':
-            uidNumber = '0'
-          elif username == 'authenticated':
-            gidNumber = '0'
-          elif username.startswith('@'):
-            username = username[1:]
-            self.env.log.debug('HubzeroPermissionStore::grant_permission(): SELECT gidNumber from jos_xgroups WHERE cn=%s', username)
-            cursor.execute('SELECT gidNumber from jos_xgroups WHERE cn=%s', (username,))
-            row = cursor.fetchone()
-            if row:
-              self.env.log.debug('found group id ' + str(row[0]))
-              gidNumber = str(row[0])
-          else:
-            self.env.log.debug('HubzeroPermissionStore::grant_permission(): SELECT id FROM jos_users WHERE username=%s', username)
-            cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
-            row = cursor.fetchone()
-            if row:
-              self.log.debug('found user id ' + str(row[0]))
-              uidNumber = str(row[0])
-
-          if uidNumber is not None:
-            self.env.log.debug('HubzeroPermissionStore::grant_permission(): INSERT IGNORE INTO jos_trac_user_permission (user_id,action,trac_project_id) VALUE (%s,%s,%s);', uidNumber, action, self.project_id)
-            cursor.execute('INSERT IGNORE INTO jos_trac_user_permission (user_id,action,trac_project_id) VALUE (%s,%s,%s);', (uidNumber, action, self.project_id))
-          if gidNumber is not None:
-            self.env.log.debug('HubzeroPermissionStore::grant_permission(): INSERT IGNORE INTO jos_trac_group_permission (group_id,action,trac_project_id) VALUE (%s,%s,%s);', gidNumber, action, self.project_id)
-            cursor.execute('INSERT IGNORE INTO jos_trac_group_permission (group_id,action,trac_project_id) VALUE (%s,%s,%s);', (gidNumber, action, self.project_id))
-        else:
-          if username and username != 'anonymous' and username != 'authenticated':
-
-            self.env.log.debug('HubzeroPermissionStore::grant_permission(): SELECT id FROM jos_users WHERE username=%s', username)
-            cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
-            row = cursor.fetchone()
-            if row:
-              self.log.debug('found user id' + str(row[0]))
-              uidNumber = str(row[0])
-
-            if (action.startswith('@')):
-                action = action[1:]
-                self.env.log.debug('HubzeroPermissionStore::grant_permission(): SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, jos_trac_project AS proj, jos_tool AS t WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid AND CONCAT(\'app:\',t.toolname)=proj.name AND proj.id=%s AND g.cn=%s', self.project_id, action)
-                cursor.execute('SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, jos_trac_project AS proj, jos_tool AS t WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid AND CONCAT(\'app:\',t.toolname)=proj.name AND proj.id=%s AND g.cn=%s', (self.project_id, action))
-                row = cursor.fetchone()
-                if row:
-                  self.log.debug('found group id ' + str(row[0]))
-                  gidNumber = str(row[0])
-
-            if True:
-              self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
-            elif gidNumber is not None and uidNumber is not None:
-              self.env.log.debug('HubzeroPermissionStore::grant_permission(): INSERT IGNORE INTO jos_xgroups_members (gidNumber, uidNumber) VALUES (%s,%s)', gidNumber, uidNumber)
-              cursor.execute('INSERT IGNORE INTO jos_xgroups_members (gidNumber, uidNumber) VALUES (%s,%s)', (gidNumber, uidNumber))
-              self.env.debug.info('Granted permission for %s to %s' % (action, username))
-            else:
-              self.env.log.info('Unknown user or group in grant request')
-
+                        # Group membership is intentionally managed only via the
+                        # HUBzero CMS (so LDAP sync stays consistent); this plugin
+                        # never INSERTs into jos_xgroups_members.  The previous
+                        # implementation reached this point with `if True:` and a
+                        # dead-code `elif gidNumber is not None and uidNumber is
+                        # not None: cursor.execute(INSERT IGNORE INTO
+                        # jos_xgroups_members ...)` -- dropped.
+                        self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
+        except Exception:
+            self.env.log.exception('HubzeroPermissionStore::grant_permission(%r, %r) failed', username, action)
         self.env.log.debug('HubzeroPermissionStore::grant_permission() end')
-        self.db.disconnect()
 
     def revoke_permission(self, username, action):
         """Revokes a users' permission to perform the specified action."""
-        
-        self.env.log.debug('HubzeroPermissionStore::revoke_permission() start')
+        self.env.log.debug('HubzeroPermissionStore::revoke_permission(%s, %s) start', username, action)
+        try:
+            with _cms_cursor(self.env) as (cursor, _db):
+                uidNumber = None
+                gidNumber = None
+                if action.isupper():
+                    if username == 'anonymous':
+                        uidNumber = '0'
+                    elif username == 'authenticated':
+                        gidNumber = '0'
+                    elif username.startswith('@'):
+                        username = username[1:]
+                        cursor.execute('SELECT gidNumber from jos_xgroups WHERE cn=%s', (username,))
+                        row = cursor.fetchone()
+                        if row:
+                            gidNumber = str(row[0])
+                    else:
+                        cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
+                        row = cursor.fetchone()
+                        if row:
+                            uidNumber = str(row[0])
 
-        cursor = self.db.cursor()
+                    if uidNumber is not None:
+                        cursor.execute('DELETE FROM jos_trac_user_permission '
+                                       'WHERE trac_project_id=%s AND user_id=%s AND action=%s;',
+                                       (self.project_id, uidNumber, action))
+                    if gidNumber is not None:
+                        cursor.execute('DELETE FROM jos_trac_group_permission '
+                                       'WHERE trac_project_id=%s AND group_id=%s AND action=%s;',
+                                       (self.project_id, gidNumber, action))
+                else:
+                    if username and username != 'anonymous' and username != 'authenticated':
+                        cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
+                        row = cursor.fetchone()
+                        if row:
+                            uidNumber = str(row[0])
 
-        if not cursor:
-          self.env.log.debug('HubzeroPermissionStore::revoke_permission() no database cursor. end')
-          self.db.disconnect()
-          return
+                        if action.startswith('@'):
+                            action = action[1:]
+                        cursor.execute('SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, '
+                                       'jos_trac_project AS proj, jos_tool AS t '
+                                       "WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid "
+                                       "AND CONCAT('app:',t.toolname)=proj.name "
+                                       'AND proj.id=%s AND g.cn=%s',
+                                       (self.project_id, action))
+                        row = cursor.fetchone()
+                        if row:
+                            gidNumber = str(row[0])
 
-        uidNumber = None
-        gidNumber = None
-
-        if action.isupper():
-          if username == 'anonymous':
-            uidNumber = '0'
-          elif username == 'authenticated':
-            gidNumber = '0'
-          elif username.startswith('@'):
-            username = username[1:]
-            self.env.log.debug('HubzeroPermissionStore::revoke_permission(): SELECT gidNumber from jos_xgroups WHERE cn=%s', username)
-            cursor.execute('SELECT gidNumber from jos_xgroups WHERE cn=%s', (username,))
-            row = cursor.fetchone()
-            if row:
-              self.log.debug('found group id ' + str(row[0]))
-              gidNumber = str(row[0])
-          else:
-            self.env.log.debug('HubzeroPermissionStore::revoke_permission(): SELECT id FROM jos_users WHERE username=%s', username)
-            cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
-            row = cursor.fetchone()
-            if row:
-              self.log.debug('found user id ' + str(row[0]))
-              uidNumber = str(row[0])
-
-          if uidNumber is not None:
-            self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_trac_user_permission WHERE trac_project_id=%s AND user_id=%s AND action=%s;', self.project_id, uidNumber, action)
-            cursor.execute('DELETE FROM jos_trac_user_permission WHERE trac_project_id=%s AND user_id=%s AND action=%s;', (self.project_id, uidNumber, action))
-          if gidNumber is not None:
-            self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_trac_group_permission WHERE trac_project_id=%s AND group_id=%s AND action=%s;', self.project_id, gidNumber, action)
-            cursor.execute('DELETE FROM jos_trac_group_permission WHERE trac_project_id=%s AND group_id=%s AND action=%s;', (self.project_id, gidNumber, action))
-
-        else:
-
-          if username and username != 'anonymous' and username != 'authenticated':
-
-            self.env.log.debug('HubzeroPermissionStore::revoke_permission(): SELECT id FROM jos_users WHERE username=%s', username)
-            cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
-            row = cursor.fetchone()
-            if row:
-              self.log.debug('found user id ' + str(row[0]))
-              uidNumber = str(row[0])
-
-            if action.startswith('@'):
-              action = action[1:]
-            self.env.log.debug('HubzeroPermissionStore::grant_permission(): SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, jos_trac_project AS proj, jos_tool AS t WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid AND CONCAT(\'app:\',t.toolname)=proj.name AND proj.id=%s AND g.cn=%s', self.project_id, action)
-            cursor.execute('SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, jos_trac_project AS proj, jos_tool AS t WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid AND CONCAT(\'app:\',t.toolname)=proj.name AND proj.id=%s AND g.cn=%s', (self.project_id, action))
-            row = cursor.fetchone()
-            if row:
-              self.log.debug('found group id ' + str(row[0]))
-              gidNumber = str(row[0])
-
-            if True:
-              self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
-            elif gidNumber is not None and uidNumber is not None:
-              self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_xgroups_members WHERE gidNumber=%s AND uidNumber=%s', gidNumber, uidNumber)
-              cursor.execute('DELETE FROM jos_xgroups_members WHERE gidNumber=%s AND uidNumber=%s', (gidNumber, uidNumber))
-              self.env.log.debug('HubzeroPermissionStore::revoke_permission(): DELETE FROM jos_xgroups_managers WHERE gidNumber=%s AND uidNumber=%s', gidNumber, uidNumber)
-              cursor.execute('DELETE FROM jos_xgroups_managers WHERE gidNumber=%s AND uidNumber=%s', (gidNumber, uidNumber))
-              self.log.debug('Revoked permission for %s to %s' % (action, username))
-            else:
-              self.log.info('Unknown group or user in revoke request')
-
+                        # Same policy as grant_permission: group membership is
+                        # managed only via the HUBzero CMS for LDAP-sync
+                        # reasons.  Dropping the dead `elif gidNumber is not
+                        # None and uidNumber is not None:` block that would
+                        # have DELETEd from jos_xgroups_members / _managers.
+                        self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
+        except Exception:
+            self.env.log.exception('HubzeroPermissionStore::revoke_permission(%r, %r) failed', username, action)
         self.env.log.debug('HubzeroPermissionStore::revoke_permission() end')
-        self.db.disconnect()
 
 class HubzeroPermissionGroupProvider(Component):
     """Provides the basic builtin permission groups 'anonymous' and 'authenticated' and HUBzero groups."""
@@ -510,42 +402,35 @@ class HubzeroPermissionGroupProvider(Component):
     implements(IPermissionGroupProvider)
 
     def __init__(self):
-        self.env.log.debug('HubzeroPermissionGroupProvider::__init__() start')
-        self.db = HubzeroDatabaseConnection(self.env)
+        self.env.log.debug('HubzeroPermissionGroupProvider::__init__()')
         self.project = self.env.config.get('project', 'name')
-        self.db = HubzeroDatabaseConnection(self.env)
-        self.env.log.debug('HubzeroPermissionGroupProvider::__init__() end')
+        # No DB state held on the instance -- each get_permission_groups()
+        # call opens its own connection via _cms_cursor().  (The previous
+        # __init__ also accidentally constructed HubzeroDatabaseConnection
+        # twice, leaking the first one.)
 
-    def __del__(self):
-      self.env.log.debug('HubzeroPermissionGroupProvider::__del__() start')
-      self.db.disconnect()
-      self.env.log.debug('HubzeroPermissionGroupProvider::__del__() end')
+    # No __del__ -- nothing to clean up.
 
     def get_permission_groups(self, username):
-        self.env.log.debug('HubzeroPermissionGroupProvider::get_permission_groups(' + username + ') start')
-
+        self.env.log.debug('HubzeroPermissionGroupProvider::get_permission_groups(%s) start', username)
         groups = ['anonymous']
-        
-        if username and username != 'anonymous':
-            groups.append('authenticated')
-
-        cursor = self.db.cursor()
-
-        if not cursor:
-          self.env.log.debug('HubzeroPermissionGroupProvider::get_permission_groups(' + username + ') no database cursor. end')
-          self.db.disconnect()
-          return groups
-
-        if username and username != 'anonymous':
-            # NOTE: this query also references an undefined `proj` alias in
-            # WHERE / FROM -- a pre-existing bug fixed in a separate commit.
-            self.env.log.debug('HubzeroPermissionGroupProvider::get_permission_groups(%s): SELECT g.cn,p.action FROM jos_xgroups AS g, jos_xgroups_members AS m, jos_trac_group_permission AS p, jos_users AS u WHERE proj.name = %s AND m.uidNumber = u.id AND u.username = %s AND m.gidNumber = g.gidNumber AND g.gidNumber = p.group_id AND proj.id = p.trac_project_id', username, self.project, username)
-            cursor.execute('SELECT g.cn,p.action FROM jos_xgroups AS g, jos_xgroups_members AS m, jos_trac_group_permission AS p, jos_users AS u WHERE proj.name = %s AND m.uidNumber = u.id AND u.username = %s AND m.gidNumber = g.gidNumber AND g.gidNumber = p.group_id AND proj.id = p.trac_project_id', (self.project, username))
-            rows = cursor.fetchall()
-            for groupname,action in rows:
-              self.env.log.debug('HubzeroPermissionStore::get_permission_groups(' + username + '): adding group (' + groupname + ')')
-              groups.append('@' + groupname)
-
-        self.db.disconnect()
-        self.env.log.debug('HubzeroPermissionGroupProvider::get_permission_groups(' + username + ') end')
+        if not (username and username != 'anonymous'):
+            return groups
+        groups.append('authenticated')
+        try:
+            with _cms_cursor(self.env) as (cursor, _db):
+                # NOTE: this query also references an undefined `proj` alias
+                # in WHERE / FROM -- a pre-existing bug fixed in a separate
+                # commit.
+                cursor.execute('SELECT g.cn,p.action FROM jos_xgroups AS g, jos_xgroups_members AS m, '
+                               'jos_trac_group_permission AS p, jos_users AS u '
+                               'WHERE proj.name = %s AND m.uidNumber = u.id AND u.username = %s '
+                               'AND m.gidNumber = g.gidNumber AND g.gidNumber = p.group_id '
+                               'AND proj.id = p.trac_project_id',
+                               (self.project, username))
+                for groupname, _action in cursor.fetchall():
+                    groups.append('@' + groupname)
+        except Exception:
+            self.env.log.exception('HubzeroPermissionGroupProvider::get_permission_groups(%r) failed', username)
+        self.env.log.debug('HubzeroPermissionGroupProvider::get_permission_groups(%s) end', username)
         return groups
