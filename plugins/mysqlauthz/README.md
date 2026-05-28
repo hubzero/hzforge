@@ -48,14 +48,28 @@ is provisioned.
 
 ```sh
 cd plugins/mysqlauthz
-python3.11 -m pytest          # 17 tests, ~0.2s
-# Py2.7 runs the same suite via pytest 4.6.x (last Py2-supporting line):
-#   python2 -m pip install --user 'pytest<5' 'configparser' 'pymysql<1.0'
-#   python2 -m pytest
+make            # = make test = make test-py3  -> 17 tests, ~0.2s on Py3.6
+make test-py2   # same suite on Py2.7 (the production Trac interpreter today)
+make test-all   # both
+```
+
+The `Makefile` just shells out to `python3 -m pytest` / `python2 -m pytest`
+(no venv, no tox).  One-time setup per host:
+
+```sh
+sudo dnf install python3 python2                                  # Rocky 8 base
+python3 -m pip install --user 'pytest>=7,<7.1' 'pymysql>=1.0,<1.1'
+python2 -m pip install --user 'pytest<5' 'pymysql<1.0' 'configparser'
 ```
 
 Tests use the `pythonpath = ["src"]` and `testpaths = ["tests"]` settings
 in `pyproject.toml` to find the plugin source and discover the test files.
+
+> **Why not tox?**  tox 4 + virtualenv 21+ uses interpreter-discovery code
+> written in Py3.8+ syntax (the `:=` walrus operator on
+> `python_discovery._py_info` line 183), so it can't drive Py3.6 (Rocky 8's
+> stock `/usr/bin/python3`) or Py2.7 (the production Trac interpreter).
+> The Makefile sidesteps that by invoking each system Python's own `-m pytest`.
 
 ## Provenance
 

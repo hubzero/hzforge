@@ -53,7 +53,18 @@ After install, every Trac env on the host picks up both macros via the
 
 ```sh
 cd plugins/macros
-python3.11 -m pytest          # 7 tests, ~0.1s
+make            # = make test = make test-py3  -> 7 tests, ~0.1s on Py3.6
+make test-py2   # same suite on Py2.7
+make test-all   # both
+```
+
+The `Makefile` just shells out to `python3 -m pytest` / `python2 -m pytest`
+(no venv, no tox -- see [mysqlauthz/README.md](../mysqlauthz/README.md#running-the-tests)
+for the why-no-tox explanation).  One-time setup per host:
+
+```sh
+python3 -m pip install --user 'pytest>=7,<7.1'
+python2 -m pip install --user 'pytest<5'
 ```
 
 Tests use `pythonpath = ["src"]` and `testpaths = ["tests"]` in
