@@ -579,8 +579,14 @@ def write_service_conf(svc):
               f"IncludeOptional {inc}/git/gitExternal.conf"]
     elif svc == "trac":
         if ARGS.trac_handler == "mod_wsgi":
-            L += ["# Trac via mod_wsgi (WSGIScriptAliasMatch self-diverts; no carve-out needed)",
-                  "WSGIDaemonProcess trac user=apache group=apache processes=2 threads=15 "
+            L += ["# Trac via mod_wsgi (WSGIScriptAliasMatch self-diverts; no carve-out needed).",
+                  "# processes=1 is intentional: Trac's SQLite connection pool keeps a long-lived",
+                  "# connection per worker, and pooled SQLite connections don't reliably see rows",
+                  "# INSERTed by other worker processes (the trac_auth `auth_cookie` table is the",
+                  "# canonical symptom -- a row written by worker A becomes invisible to a SELECT in",
+                  "# worker B with default `journal_mode=delete`).  threads=30 gives equivalent",
+                  "# concurrency to the previous processes=2 threads=15.",
+                  "WSGIDaemonProcess trac user=apache group=apache processes=1 threads=30 "
                   "python-home=/usr display-name=%{GROUP}",
                   "WSGIApplicationGroup %{GLOBAL}",
                   f'WSGIScriptAliasMatch "^/tools/[^/]+(?=/(?:{verbs})(?:/|$))" '
