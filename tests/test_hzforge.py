@@ -264,3 +264,119 @@ def test_upgrade_trac_env_handles_missing_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(hz, "_macros_universal_installed", lambda: False)
     hz._upgrade_trac_env(str(tmp_path / "nonexistent"))
     assert any("not a directory" in n for n in hz.CTX.notes)
+
+
+# --- _ensure_components_enabled (text-surgery patcher for trac.ini) ---
+
+def test_ensure_components_enabled_inserts_into_existing_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    ini = tmp_path / "trac.ini"
+    ini.write_text(
+        "[trac]\nsecure_cookies = True\n\n"
+        "[components]\nhubzeroplugin.* = enabled\n\n"
+        "[wiki]\n"
+    )
+    changed = hz._ensure_components_enabled(str(ini), "hubzero_macros.*")
+    assert changed is True
+    body = ini.read_text()
+    assert "hubzero_macros.* = enabled" in body
+    # inserted right after [components] header -- before the existing entry
+    assert body.index("hubzero_macros.* = enabled") < body.index("hubzeroplugin.* = enabled")
+    # other sections untouched, comments-or-whitespace preserved
+    assert "[trac]"          in body
+    assert "secure_cookies"  in body
+    assert "[wiki]"          in body
+
+
+def test_ensure_components_enabled_appends_new_section_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    ini = tmp_path / "trac.ini"
+    ini.write_text("[trac]\nsecure_cookies = True\n")
+    changed = hz._ensure_components_enabled(str(ini), "hubzero_macros.*")
+    assert changed is True
+    body = ini.read_text()
+    assert "[components]"               in body
+    assert "hubzero_macros.* = enabled" in body
+    # original content preserved
+    assert body.startswith("[trac]\nsecure_cookies = True\n")
+
+
+def test_ensure_components_enabled_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    ini = tmp_path / "trac.ini"
+    ini.write_text("[components]\nhubzero_macros.* = enabled\n")
+    changed = hz._ensure_components_enabled(str(ini), "hubzero_macros.*")
+    assert changed is False
+    # exactly one occurrence -- no duplicate inserted
+    assert ini.read_text().count("hubzero_macros.* = enabled") == 1
+
+
+def test_ensure_components_enabled_dry_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(True), raising=False)   # dry=True
+    ini = tmp_path / "trac.ini"
+    original = "[trac]\nsecure_cookies = True\n"
+    ini.write_text(original)
+    changed = hz._ensure_components_enabled(str(ini), "hubzero_macros.*")
+    assert changed is True
+    assert ini.read_text() == original            # unwritten under --dry-run
+    assert "[dry-run]" in capsys.readouterr().out  # log() goes to stdout
+
+
+def test_ensure_components_enabled_returns_false_for_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    assert hz._ensure_components_enabled(str(tmp_path / "no-such.ini"),
+                                         "hubzero_macros.*") is False
+
+
+def test_upgrade_trac_env_enables_hubzero_macros_before_disabling_legacy(tmp_path, monkeypatch):
+    """The whole reason _ensure_components_enabled exists: without the enable,
+    Trac would render `[[image …]]` as a "missing wiki" link once the per-env
+    image.py is renamed to .disabled.  This test locks in that the enable lands
+    before the rename, so the env stays continuously functional."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: True)
+    env = tmp_path / "histogram"
+    (env / "plugins").mkdir(parents=True)
+    (env / "conf").mkdir()
+    (env / "plugins" / "image.py").write_text("# legacy image macro")
+    (env / "plugins" / "link.py").write_text("# legacy link macro")
+    (env / "conf" / "trac.ini").write_text("[trac]\nsecure_cookies = True\n")
+    hz._upgrade_trac_env(str(env))
+    body = (env / "conf" / "trac.ini").read_text()
+    assert "[components]"               in body
+    assert "hubzero_macros.* = enabled" in body
+    # legacy disabled too -- both halves of the transition land
+    assert not (env / "plugins" / "image.py").exists()
+    assert     (env / "plugins" / "image.py.disabled").is_file()
+
+
+def test_upgrade_trac_env_no_legacy_no_trac_ini_change(tmp_path, monkeypatch):
+    """If there's no per-env legacy to disable, don't touch trac.ini -- the
+    env never asked for the system-wide macros and we shouldn't surprise it
+    by activating them out of the blue."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: True)
+    env = tmp_path / "quiet"
+    (env / "plugins").mkdir(parents=True)
+    (env / "conf").mkdir()
+    original_ini = "[trac]\nsecure_cookies = True\n"
+    (env / "conf" / "trac.ini").write_text(original_ini)
+    hz._upgrade_trac_env(str(env))
+    assert (env / "conf" / "trac.ini").read_text() == original_ini
+
+
+def test_upgrade_trac_env_universal_missing_does_not_touch_trac_ini(tmp_path, monkeypatch):
+    """Legacy present + universal missing -> warn only; don't enable the
+    system-wide plugin (it isn't installed) and don't disable the per-env
+    files (they're still the env's only source of macros)."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_macros_universal_installed", lambda: False)
+    env = tmp_path / "legacy_only"
+    (env / "plugins").mkdir(parents=True)
+    (env / "conf").mkdir()
+    (env / "plugins" / "image.py").write_text("# legacy")
+    original_ini = "[trac]\nsecure_cookies = True\n"
+    (env / "conf" / "trac.ini").write_text(original_ini)
+    hz._upgrade_trac_env(str(env))
+    assert (env / "plugins" / "image.py").is_file()              # not disabled
+    assert (env / "conf" / "trac.ini").read_text() == original_ini  # untouched

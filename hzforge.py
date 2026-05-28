@@ -1318,15 +1318,69 @@ def _macros_universal_installed():
     return False
 
 
+def _ensure_components_enabled(trac_ini, key, value="enabled"):
+    """Ensure `[components] <key> = <value>` is present in trac.ini.
+
+    Idempotent text-level surgery: if the exact `key = value` line is
+    already in any section, no-op; else insert it right after the
+    `[components]` header (or append a new `[components]` section at EOF
+    if none exists).  Preserves comments, ordering, whitespace, and the
+    file's existing mode/owner.  Honors --dry-run.  Returns True iff
+    modified.
+
+    Trac's `Environment.is_component_enabled` returns None for non-`trac.*`
+    components -- which the framework interprets as "enabled only if
+    located in <env>/plugins/" -- so entry-point plugins like
+    hubzero_macros need an explicit `[components]` enable to activate."""
+    if not os.path.isfile(trac_ini):
+        return False
+    with open(trac_ini) as fh:
+        text = fh.read()
+    # Already enabled?  Match the exact `key = value` line anywhere in the file.
+    if re.search(r'^\s*' + re.escape(key) + r'\s*=\s*' + re.escape(value) + r'\s*$',
+                 text, re.M):
+        return False
+    sec = re.search(r'^\[components\]\s*$', text, re.M)
+    if sec:
+        end = sec.end()
+        new_text = text[:end] + "\n" + key + " = " + value + text[end:]
+    else:
+        if not text.endswith("\n"):
+            text += "\n"
+        new_text = text + "\n[components]\n" + key + " = " + value + "\n"
+    if CTX.dry:
+        log(f"[dry-run] enable [components] {key} = {value} in {trac_ini}")
+        _mark()
+        return True
+    st = os.stat(trac_ini)
+    d = os.path.dirname(trac_ini)
+    fd, tmp = tempfile.mkstemp(dir=d)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(new_text)
+    os.replace(tmp, trac_ini)
+    os.chmod(trac_ini, stat.S_IMODE(st.st_mode))
+    try:
+        os.chown(trac_ini, st.st_uid, st.st_gid)
+    except PermissionError:
+        pass   # tests may run as a non-root user with no chown rights
+    log(f"enabled [components] {key} = {value} in {trac_ini}")
+    _mark()
+    return True
+
+
 def _upgrade_trac_env(env_path):
     """Per-env Trac upgrade: legacy macro cleanup + trac.ini sanity.
 
     Today (items 1 & 2 of the original scope):
-      * Move any `<env>/plugins/{image,link}.py` left over from forge's
-        `installtool` to `<file>.disabled` -- BUT only when the universal
+      * If any `<env>/plugins/{image,link}.py` is present AND the universal
         `hubzero_macros` plugin is installed (a Python on the host can
-        `import hubzero_macros`), so the env keeps serving those macros.
-        Otherwise just warn and leave them in place.
+        `import hubzero_macros`), first ensure `[components] hubzero_macros.*
+        = enabled` in `<env>/conf/trac.ini` (Trac would otherwise treat the
+        system-wide entry-point plugin as disabled-by-default and the env
+        would render `[[image …]]`/`[[link …]]` as "missing wiki" links once
+        the per-env files are out of the way), then rename each legacy file
+        to `<file>.disabled`.  If hubzero_macros isn't installed, just warn
+        and leave the per-env files in place.
       * Read `<env>/conf/trac.ini` and warn on any `[components]` entry
         starting with `image.` or `link.` -- those mask the universal
         plugin's `hubzero_macros.image`/`.link` modules and want cleanup.
@@ -1339,20 +1393,28 @@ def _upgrade_trac_env(env_path):
         warn(f"  {env_path}: not a directory")
         return
 
-    universal_ok = _macros_universal_installed()
     plugins_dir = os.path.join(env_path, "plugins")
-    if os.path.isdir(plugins_dir):
-        for legacy in ("image.py", "link.py"):
-            src = os.path.join(plugins_dir, legacy)
-            if not os.path.isfile(src):
-                continue
-            if universal_ok:
+    trac_ini    = os.path.join(env_path, "conf", "trac.ini")
+
+    legacy_present = [
+        legacy for legacy in ("image.py", "link.py")
+        if os.path.isdir(plugins_dir)
+           and os.path.isfile(os.path.join(plugins_dir, legacy))
+    ]
+    if legacy_present:
+        if _macros_universal_installed():
+            # Enable the system-wide plugin BEFORE disabling the per-env files,
+            # so the env stays continuously functional through the transition
+            # (no window of "missing wiki" rendering).
+            _ensure_components_enabled(trac_ini, "hubzero_macros.*")
+            for legacy in legacy_present:
+                src = os.path.join(plugins_dir, legacy)
                 _rename(src, src + ".disabled")
-            else:
+        else:
+            for legacy in legacy_present:
                 warn(f"  legacy {plugins_dir}/{legacy} present; install "
                      "hubzero-trac-macros first, then re-run upgrade-trac")
 
-    trac_ini = os.path.join(env_path, "conf", "trac.ini")
     if os.path.isfile(trac_ini):
         try:
             cp = configparser.RawConfigParser()
