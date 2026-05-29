@@ -312,6 +312,52 @@ def pip_install(spec):
     run(["sh", "-c", 'umask 022; exec pip2 install "$1"', "sh", spec])
 
 
+def pip_install_plugin_wheel(wheel_path, interpreters=("pip2", "pip3")):
+    """Install a Trac plugin wheel (cmsauth, mysqlauthz, macros) into every
+    available system pip interpreter.  Use this -- NOT `pip_install` -- for
+    anything that drops in next to Trac as a Component.
+
+    Two differences from `pip_install`:
+
+    * `--no-deps`.  Plugin `setup.cfg` files deliberately omit `Trac` from
+      `install_requires` (the host is the source of truth for which Trac
+      version is present), but the host's pip resolver would still re-resolve
+      any other listed deps -- and a plugin that ever adds `Trac>=X` back
+      would let pip clobber the running mod_wsgi daemon's Trac install.
+      `--no-deps` is the second belt.  Incident on 2026-05-29: a routine
+      `sudo pip2 install <wheel>` resolved `Trac>=1.0` from a stale
+      `install_requires`, upgraded Py2 Trac 1.0.14 -> 1.4.4, and would have
+      nuked every Trac env on the next Apache cycle.  Recovery was an hour
+      of chmod + pin-back-to-1.0.14; `--no-deps` would have prevented it.
+
+    * Install into BOTH `pip2` and `pip3` (whichever are present).  The help
+      host runs Trac on Py2.7 today AND keeps a parallel Py3.6 stack for
+      stage 2 prep; plugin wheels are `py2.py3-none-any` and should be
+      usable from either interpreter.  Hosts that only have one of the two
+      skip the missing one quietly.
+
+    Like `pip_install`, runs behind `umask 022` so apache can read the
+    installed files (root's default umask 0077 makes them mode 600/700
+    otherwise -- see `fix_pip_perms()` for the recovery path).
+
+    --upgrade so re-installing a higher version replaces the older one in
+    place; same-version reinstalls are a no-op (pip 9's `--force-reinstall`
+    same-version quirk is avoided by version-bumping, not by forcing here).
+    """
+    installed_any = False
+    for pip in interpreters:
+        if not _ok([pip, "--version"]):
+            log(f"{pip} not present -- skipping plugin install on this interpreter")
+            continue
+        run(["sh", "-c",
+             'umask 022; exec "$1" install --no-deps --upgrade "$2"',
+             "sh", pip, wheel_path])
+        installed_any = True
+    if not installed_any:
+        die(f"no pip interpreter found ({', '.join(interpreters)}); "
+            "install python2 and/or python3 first")
+
+
 def ensure_wandisco_repo():
     write_file(WANDISCO_REPO_PATH, WANDISCO_REPO, 0o644)
 
@@ -1374,6 +1420,75 @@ def _ensure_components_enabled(trac_ini, key, value="enabled"):
     return True
 
 
+# Match the LDAP <LocationMatch ...> directive in 00-forge-trac.conf,
+# capturing the negative-lookahead env-name list (if any) so we can
+# extend it.  Three observed shapes:
+#
+#   <LocationMatch "^/tools/[^/]+/login">                 (no carve-out yet)
+#   <LocationMatch "^/tools/(?!FOO/)[^/]+/login">         (single env)
+#   <LocationMatch "^/tools/(?!(?:FOO|BAR)/)[^/]+/login"> (multiple envs)
+#
+# Group 1 = the prefix up to (and including) `^/tools/`.
+# Group 2 = the carve-out env-list "FOO" or "FOO|BAR" (empty/None if absent).
+# Group 3 = the suffix `[^/]+/login"`.
+_LDAP_LOC_RE = re.compile(
+    r'(<LocationMatch\s+"\^/tools/)'
+    r'(?:\(\?!(?:\(\?:)?([\w\-]+(?:\|[\w\-]+)*)\)?/\))?'
+    r'(\[\^/\]\+/login")'
+)
+
+
+def _ldap_carveout_ensure(httpd_conf, env_name):
+    """Ensure `env_name` is in the negative-lookahead skip list of the LDAP
+    `<LocationMatch>` block in `httpd_conf`.  Returns True iff modified.
+
+    Idempotent text-level surgery -- preserves the rest of the file byte for
+    byte (mode/owner/whitespace).  If the directive isn't found at all, no-op
+    and warn (the conf may have been hand-edited or the LDAP block already
+    removed; either way nothing left to carve out)."""
+    if not os.path.isfile(httpd_conf):
+        warn(f"{httpd_conf} not found; skipping LDAP carve-out")
+        return False
+    with open(httpd_conf) as fh:
+        text = fh.read()
+    m = _LDAP_LOC_RE.search(text)
+    if not m:
+        warn(f"no LDAP <LocationMatch> directive found in {httpd_conf} "
+             f"(removed or hand-edited?); skipping carve-out for {env_name}")
+        return False
+    existing = set(m.group(2).split("|")) if m.group(2) else set()
+    if env_name in existing:
+        return False
+    existing.add(env_name)
+    envs_sorted = sorted(existing)
+    if len(envs_sorted) == 1:
+        carveout = "(?!" + envs_sorted[0] + "/)"
+    else:
+        carveout = "(?!(?:" + "|".join(envs_sorted) + ")/)"
+    new_text = (text[:m.start()] + m.group(1) + carveout + m.group(3)
+                + text[m.end():])
+    if CTX.dry:
+        log(f"[dry-run] extend LDAP <LocationMatch> carve-out in "
+            f"{httpd_conf}: + {env_name}")
+        _mark()
+        return True
+    st = os.stat(httpd_conf)
+    d = os.path.dirname(httpd_conf)
+    fd, tmp = tempfile.mkstemp(dir=d)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(new_text)
+    os.replace(tmp, httpd_conf)
+    os.chmod(httpd_conf, stat.S_IMODE(st.st_mode))
+    try:
+        os.chown(httpd_conf, st.st_uid, st.st_gid)
+    except PermissionError:
+        pass
+    log(f"extended LDAP <LocationMatch> carve-out in {httpd_conf}: "
+        f"+ {env_name}  (now skipping: {', '.join(envs_sorted)})")
+    _mark()
+    return True
+
+
 def _upgrade_trac_env(env_path):
     """Per-env Trac upgrade: legacy macro cleanup + trac.ini sanity.
 
@@ -1434,6 +1549,103 @@ def _upgrade_trac_env(env_path):
         except (configparser.Error, OSError) as e:
             warn(f"  could not read {trac_ini}: {e}")
     log("  done")
+
+
+def cmd_enable_cmsauth():
+    """`hzforge enable-cmsauth ENV [ENV ...] [--install-wheel PATH]`
+
+    Switch one or more Trac envs from Apache LDAP-Basic auth to HUBzero CMS
+    SSO via the `hubzero-trac-cmsauth` plugin.  Per env:
+      * `[components] hubzero_cmsauth.* = enabled` (+ `LoginModule = disabled`)
+        added to `<env>/conf/trac.ini`
+      * the LDAP `<LocationMatch>` directive in the trac drop-in extended to
+        skip this env via the negative-lookahead carve-out
+
+    `--install-wheel PATH` (optional, recommended for the first env on a
+    fresh host) ALSO installs the cmsauth wheel into every available
+    interpreter's site-packages before the per-env work.  Without it, the
+    plugin is assumed to be installed system-wide already; an import check
+    runs first and the subcommand dies with instructions if not.
+
+    Calls `apply_changes()` at the end -- the LDAP carve-out is a vhost-
+    scope conf edit, so Apache needs `apachectl configtest` + graceful
+    reload to pick it up.  (A `touch /opt/trac/wsgi/hubtrac.wsgi` is not
+    sufficient because it only triggers mod_wsgi daemon reloads, not
+    vhost-conf re-parse.)"""
+    tools_dir = OPT["trac_tools"][0]
+    if not os.path.isdir(tools_dir):
+        die(f"trac not configured (no {tools_dir})")
+    all_envs = sorted(
+        d for d in os.listdir(tools_dir)
+        if os.path.isdir(os.path.join(tools_dir, d))
+        and os.path.isfile(os.path.join(tools_dir, d, "conf", "trac.ini"))
+    )
+    requested = list(getattr(ARGS, "envs", None) or [])
+    if not requested:
+        die("usage: hzforge enable-cmsauth ENV [ENV ...]  "
+            f"(envs available: {', '.join(all_envs) or '(none)'})")
+    bad = [e for e in requested if e not in all_envs]
+    if bad:
+        die(f"unknown env(s): {', '.join(bad)}  "
+            f"(have: {', '.join(all_envs) or '(none)'})")
+
+    # 1. Optional wheel install.  Always before the import check, since the
+    #    point is to make the import work.
+    wheel = getattr(ARGS, "install_wheel", None)
+    if wheel:
+        if not os.path.isfile(wheel):
+            die(f"--install-wheel: file not found: {wheel}")
+        step(f"Install cmsauth wheel: {wheel}")
+        pip_install_plugin_wheel(wheel)
+
+    # 2. Import check (best-effort: try apache user if runuser is available,
+    #    fall back to root-import which still verifies on-disk presence).
+    step("Verify hubzero_cmsauth is importable")
+    pythons = [py for py in ("python2", "python3") if _ok([py, "--version"])]
+    if not pythons:
+        die("no python2 or python3 found on the host")
+    import_failures = []
+    for py in pythons:
+        # Try `runuser -u apache` first (covers the umask/perms issue the
+        # plugin install must avoid); fall back to root import if runuser
+        # isn't available or the apache user doesn't exist.
+        probe = ([py, "-c", "import hubzero_cmsauth.api"]
+                 if not _ok(["runuser", "-u", "apache", "--", py, "-c",
+                             "import hubzero_cmsauth.api"])
+                 else None)
+        if probe is None:
+            log(f"  {py}: apache can import hubzero_cmsauth.api")
+            continue
+        if _ok(probe):
+            log(f"  {py}: root can import (but apache may not "
+                "-- check umask/perms)")
+            continue
+        import_failures.append(py)
+    if import_failures:
+        die("hubzero_cmsauth not importable on "
+            f"{', '.join(import_failures)}; "
+            "install the wheel first (--install-wheel PATH or "
+            "`sudo sh -c 'umask 022 && pipN install --no-deps "
+            "/path/to/wheel'`)")
+
+    # 3. Per-env trac.ini surgery.
+    step(f"Enable cmsauth on {len(requested)} env(s): {','.join(requested)}")
+    for env_name in requested:
+        env_path = os.path.join(tools_dir, env_name)
+        trac_ini = os.path.join(env_path, "conf", "trac.ini")
+        log(f"  {env_name}")
+        _ensure_components_enabled(trac_ini, "hubzero_cmsauth.*", "enabled")
+        _ensure_components_enabled(trac_ini, "trac.web.auth.LoginModule", "disabled")
+
+    # 4. LDAP carve-out (one block per host; extend it once per env).
+    httpd_conf = dropin_path("trac")
+    step(f"Extend LDAP <LocationMatch> carve-out in {httpd_conf}")
+    for env_name in requested:
+        _ldap_carveout_ensure(httpd_conf, env_name)
+
+    # 5. apachectl configtest + graceful reload (CTX.config_changed was set
+    #    by _ensure_components_enabled and _ldap_carveout_ensure).
+    apply_changes()
 
 
 def cmd_upgrade_trac():
@@ -1516,6 +1728,15 @@ def build_parser():
                          help="per-env Trac upgrade (legacy macro cleanup + trac.ini sanity)")
     pug.add_argument("envs", nargs="*", metavar="ENV",
                      help="trac envs to upgrade (under /opt/trac/tools); default: all configured")
+
+    pec = sub.add_parser("enable-cmsauth", parents=[common],
+                         help="switch trac envs from LDAP to HUBzero CMS SSO")
+    pec.add_argument("envs", nargs="*", metavar="ENV",
+                     help="trac envs to switch (under /opt/trac/tools); REQUIRED, no default")
+    pec.add_argument("--install-wheel", metavar="PATH", dest="install_wheel",
+                     help="path to the hubzero_trac_cmsauth-*.whl to install "
+                          "system-wide before enabling (recommended for the "
+                          "first env on a fresh host; idempotent)")
     return p
 
 
@@ -1579,6 +1800,8 @@ def main():
         cmd_test()
     elif args.command == "upgrade-trac":
         cmd_upgrade_trac()
+    elif args.command == "enable-cmsauth":
+        cmd_enable_cmsauth()
 
     step("Done")
     for n in CTX.notes:

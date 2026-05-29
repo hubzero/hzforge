@@ -328,6 +328,109 @@ def test_ensure_components_enabled_returns_false_for_missing_file(tmp_path, monk
                                          "hubzero_macros.*") is False
 
 
+# --- _ldap_carveout_ensure (extends the negative lookahead in 00-forge-trac.conf) ---
+
+_LDAP_CONF_NO_CARVEOUT = (
+    '# managed by hzforge\n'
+    'WSGIDaemonProcess trac processes=1 threads=30\n'
+    '<LocationMatch "^/tools/[^/]+/login">\n'
+    '    AuthType Basic\n'
+    '    AuthBasicProvider ldap\n'
+    '</LocationMatch>\n'
+)
+
+_LDAP_CONF_SINGLE = (
+    '<LocationMatch "^/tools/(?!hzforgetest/)[^/]+/login">\n'
+    '    AuthType Basic\n'
+    '</LocationMatch>\n'
+)
+
+_LDAP_CONF_MULTI = (
+    '<LocationMatch "^/tools/(?!(?:bio3d|hzforgetest)/)[^/]+/login">\n'
+    '    AuthType Basic\n'
+    '</LocationMatch>\n'
+)
+
+
+def test_ldap_carveout_promotes_no_carveout_to_single(tmp_path, monkeypatch):
+    """First env added: rewrite the block from `^/tools/[^/]+/login` to
+    `^/tools/(?!hzforgetest/)[^/]+/login`.  Uses the single-form syntax
+    (one env, no `(?:...)` group)."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    conf = tmp_path / "00-forge-trac.conf"
+    conf.write_text(_LDAP_CONF_NO_CARVEOUT)
+    changed = hz._ldap_carveout_ensure(str(conf), "hzforgetest")
+    assert changed is True
+    body = conf.read_text()
+    assert '<LocationMatch "^/tools/(?!hzforgetest/)[^/]+/login">' in body
+    # other lines preserved verbatim
+    assert "WSGIDaemonProcess trac processes=1 threads=30" in body
+    assert "AuthBasicProvider ldap" in body
+
+
+def test_ldap_carveout_promotes_single_to_multiple(tmp_path, monkeypatch):
+    """Adding a 2nd env: rewrite from `(?!FOO/)` to `(?!(?:BAR|FOO)/)`
+    (with the env names sorted alphabetically for a deterministic diff)."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    conf = tmp_path / "00-forge-trac.conf"
+    conf.write_text(_LDAP_CONF_SINGLE)
+    changed = hz._ldap_carveout_ensure(str(conf), "bio3d")
+    assert changed is True
+    body = conf.read_text()
+    # sorted alphabetically: bio3d before hzforgetest
+    assert '<LocationMatch "^/tools/(?!(?:bio3d|hzforgetest)/)[^/]+/login">' in body
+
+
+def test_ldap_carveout_extends_multiple(tmp_path, monkeypatch):
+    """Nth env added: insert into the existing `(?:...)` group, re-sort."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    conf = tmp_path / "00-forge-trac.conf"
+    conf.write_text(_LDAP_CONF_MULTI)
+    changed = hz._ldap_carveout_ensure(str(conf), "calc")
+    assert changed is True
+    assert ('<LocationMatch "^/tools/(?!(?:bio3d|calc|hzforgetest)/)'
+            '[^/]+/login">') in conf.read_text()
+
+
+def test_ldap_carveout_is_idempotent_for_already_carved_env(tmp_path, monkeypatch):
+    """Re-running with the same env name: no-op, file untouched."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    conf = tmp_path / "00-forge-trac.conf"
+    conf.write_text(_LDAP_CONF_SINGLE)
+    before = conf.read_text()
+    changed = hz._ldap_carveout_ensure(str(conf), "hzforgetest")
+    assert changed is False
+    assert conf.read_text() == before     # byte-for-byte unchanged
+
+
+def test_ldap_carveout_dry_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(True), raising=False)
+    conf = tmp_path / "00-forge-trac.conf"
+    conf.write_text(_LDAP_CONF_NO_CARVEOUT)
+    changed = hz._ldap_carveout_ensure(str(conf), "hzforgetest")
+    assert changed is True
+    assert conf.read_text() == _LDAP_CONF_NO_CARVEOUT    # unwritten
+    assert "[dry-run]" in capsys.readouterr().out
+
+
+def test_ldap_carveout_skips_when_locationmatch_absent(tmp_path, monkeypatch, capsys):
+    """The trac drop-in may have had the LDAP block removed entirely
+    (final-state cutover).  No-op + warn, no error."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    conf = tmp_path / "00-forge-trac.conf"
+    conf.write_text("# no LocationMatch here\nWSGIDaemonProcess trac\n")
+    changed = hz._ldap_carveout_ensure(str(conf), "hzforgetest")
+    assert changed is False
+    assert "no LDAP <LocationMatch>" in capsys.readouterr().out
+
+
+def test_ldap_carveout_skips_missing_file(tmp_path, monkeypatch):
+    """No conf file -> no-op + warn (don't blow up; just nothing to do)."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    assert hz._ldap_carveout_ensure(str(tmp_path / "no-such.conf"),
+                                    "hzforgetest") is False
+
+
 def test_upgrade_trac_env_enables_hubzero_macros_before_disabling_legacy(tmp_path, monkeypatch):
     """The whole reason _ensure_components_enabled exists: without the enable,
     Trac would render `[[image …]]` as a "missing wiki" link once the per-env

@@ -93,6 +93,81 @@ The `LoginModule = disabled` line is important — Trac's built-in
 `LoginModule` also implements `IRequestHandler` for `/login` and
 `/logout`, so leaving it enabled would race ours.
 
+## Operations
+
+A short list of things that bit us on the hzforge deployment; any
+re-deployment will hit them too.
+
+### mod_wsgi must run with `processes=1`
+
+Trac keeps a long-lived `sqlite3.Connection` per mod_wsgi worker
+process. With SQLite's default `journal_mode=delete`, a pooled
+connection in worker A holds a stale snapshot and never sees rows that
+worker B has INSERTed — so the `trac_auth` cookie issued by `_do_login`
+running in worker A is looked up in worker B on the next request,
+finds zero rows in `auth_cookie`, and falls back to the CMS API on
+every request (defeating the whole point of the cookie). Configure the
+Trac daemon process group as:
+
+```apache
+WSGIDaemonProcess trac user=apache group=apache processes=1 threads=30 \
+    python-home=/usr display-name=%{GROUP}
+```
+
+`processes=1 threads=30` gives the same concurrency as `processes=2
+threads=15` and sidesteps the cross-process visibility problem
+entirely (one connection pool, shared by every thread). Alternative
+workarounds — bypassing Trac's pool with a fresh `sqlite3.Connection`
+per call, or `journal_mode=WAL` — are workable but uglier; the
+upstream AccountManagerPlugin's same SSO pattern implicitly assumes
+`processes=1` too.
+
+### Install plugin wheels with `umask 022` and `--no-deps`
+
+Root's default umask on RHEL/Rocky 8 is `0077`, which makes `pip`
+write site-packages files mode `0600`/dirs mode `0700` — unreadable to
+the `apache` user that mod_wsgi runs as. The next Apache restart
+silently breaks every Trac env. Always wrap:
+
+```sh
+sudo sh -c 'umask 022 && pip2 install --no-deps /path/to/wheel'
+sudo sh -c 'umask 022 && pip3 install --no-deps /path/to/wheel'
+```
+
+`--no-deps` is the second belt: every plugin's `setup.cfg`
+deliberately omits `Trac` from `install_requires` (the host is the
+source of truth for which Trac version is present), but a plugin that
+ever adds a `Trac>=X` line back would otherwise let pip clobber the
+running daemon's Trac install.
+
+(`hzforge.py`'s built-in `pip_install` already wraps `umask 022`; the
+rule above only applies to ad-hoc installs outside the tool. The
+plugin-wheel install path inside `hzforge` also adds `--no-deps`.)
+
+### LDAP `<LocationMatch>` carve-out vs full cutover
+
+Until cmsauth is enabled on every env in the hub, the Apache
+`<LocationMatch>` block that handles LDAP-Basic auth at
+`/tools/<env>/login` needs to skip the envs that have switched. The
+current pattern uses a negative lookahead:
+
+```apache
+<LocationMatch "^/tools/(?!hzforgetest/)[^/]+/login">
+    AuthType Basic
+    ...
+</LocationMatch>
+```
+
+Adding another env extends the lookahead group:
+
+```apache
+<LocationMatch "^/tools/(?!(?:hzforgetest|bio3d)/)[^/]+/login">
+```
+
+Once every env is migrated, drop the `<LocationMatch>` block
+entirely — the cmsauth plugin handles `/login` itself in those envs,
+and any remaining env that needs LDAP can have its own block.
+
 ## Running the tests
 
 ```sh
