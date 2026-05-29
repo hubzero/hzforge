@@ -185,11 +185,28 @@ def store(store_factory):
 
 
 @pytest.fixture
-def group_provider(env):
-    """HubzeroPermissionGroupProvider with project_id pre-set."""
-    from hubzeroplugin import api
-    p = api.HubzeroPermissionGroupProvider.__new__(api.HubzeroPermissionGroupProvider)
-    p.env = env
-    p.project = env.config.get('project', 'name')
-    p.project_id = '42'
-    return p
+def group_provider_factory(env):
+    """Factory: build a HubzeroPermissionGroupProvider with project_id
+    pre-set, bypassing __init__'s own DB lookup so tests of
+    get_permission_groups() don't have to seed the SELECT.  Use this when
+    you want to override the default project_id; use `group_provider` for
+    the common case.
+
+    NB: this fixture mirrors `store_factory` -- it intentionally bypasses
+    __init__ so the test author CHOOSES whether to exercise the resolution
+    logic.  Tests that DO want to exercise __init__ should construct the
+    Component directly (see test_group_provider_init_resolves_project_id)."""
+    def make(project_id='42'):
+        from hubzeroplugin import api
+        p = api.HubzeroPermissionGroupProvider.__new__(api.HubzeroPermissionGroupProvider)
+        p.env = env
+        p.project = env.config.get('project', 'name')
+        p.project_id = project_id
+        return p
+    return make
+
+
+@pytest.fixture
+def group_provider(group_provider_factory):
+    """The common case: HubzeroPermissionGroupProvider with project_id='42'."""
+    return group_provider_factory()

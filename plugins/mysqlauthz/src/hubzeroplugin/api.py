@@ -78,6 +78,23 @@ def _open_cms_connection(env):
     )
 
 
+def _resolve_project_id(env, project_name):
+    """Read-only lookup of jos_trac_project.id by name.  Returns the id as a
+    string, or None if no row matches.  Does NOT create the row (that's
+    HubzeroPermissionStore.__init__'s job -- the Store owns project-row
+    lifecycle; other Components are read-only consumers).
+    """
+    try:
+        with _cms_cursor(env) as (cursor, _db):
+            cursor.execute('SELECT id FROM jos_trac_project WHERE name=%s',
+                           (project_name,))
+            row = cursor.fetchone()
+            return str(row[0]) if row else None
+    except Exception:
+        env.log.exception('_resolve_project_id(%r) failed', project_name)
+        return None
+
+
 @contextlib.contextmanager
 def _cms_cursor(env):
     """Yield (cursor, connection) for a fresh CMS DB connection, closing both
@@ -404,10 +421,18 @@ class HubzeroPermissionGroupProvider(Component):
     def __init__(self):
         self.env.log.debug('HubzeroPermissionGroupProvider::__init__()')
         self.project = self.env.config.get('project', 'name')
-        # No DB state held on the instance -- each get_permission_groups()
-        # call opens its own connection via _cms_cursor().  (The previous
-        # __init__ also accidentally constructed HubzeroDatabaseConnection
-        # twice, leaking the first one.)
+        # Resolve project name -> project_id once at Component construction.
+        # get_permission_groups() filters on p.trac_project_id and needs this.
+        # Read-only: this Component is a consumer, not the owner of the
+        # project row (HubzeroPermissionStore.__init__ creates it on first
+        # load).  If the row hasn't been created yet -- e.g. Provider is
+        # instantiated before Store on a brand-new env -- project_id stays
+        # None and get_permission_groups() returns the builtin groups only;
+        # the next env load (after Store has run) resolves it.
+        self.project_id = _resolve_project_id(self.env, self.project)
+        self.env.log.debug(
+            'HubzeroPermissionGroupProvider::__init__(): project_id=%s',
+            self.project_id)
 
     # No __del__ -- nothing to clean up.
 

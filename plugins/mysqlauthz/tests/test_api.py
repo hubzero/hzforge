@@ -169,6 +169,71 @@ def test_revoke_permission_authenticated_uppercase_action(fake_db, store):
 
 
 # -----------------------------------------------------------------------------
+# HubzeroPermissionGroupProvider.__init__: resolves project name -> project_id
+# via the same jos_trac_project lookup as HubzeroPermissionStore (read-only --
+# the Provider is a consumer, not the owner of the project row).
+#
+# Regression: 2.4.0 (commit 8396faf, "hzforge.4") referenced self.project_id in
+# get_permission_groups but never set it in __init__.  The first authenticated
+# request raised AttributeError, which Trac caught upstream -- silently
+# dropping every @group membership for every authenticated user in production.
+# Fixed in 2.4.1: __init__ now calls _resolve_project_id().
+# -----------------------------------------------------------------------------
+
+def test_group_provider_init_resolves_project_id_from_db(env, fake_db):
+    """The fix: __init__ runs the SELECT and stores the result on the
+    instance.  This test deliberately constructs the Component WITHOUT the
+    `group_provider` fixture (which seeds project_id manually) so the real
+    __init__ path runs."""
+    fake_db(staged_results=[[(7,)]])      # SELECT id FROM jos_trac_project -> 7
+    p = api.HubzeroPermissionGroupProvider.__new__(api.HubzeroPermissionGroupProvider)
+    p.env = env
+    api.HubzeroPermissionGroupProvider.__init__(p)
+    assert p.project_id == '7'             # str, not int (matches Store's contract)
+    assert isinstance(p.project_id, str)
+
+
+def test_group_provider_init_leaves_project_id_none_when_row_missing(env, fake_db):
+    """Read-only behavior: if the project row doesn't exist yet (e.g. the
+    Provider was instantiated before the Store on a brand-new env), we leave
+    project_id=None instead of INSERTing.  The Store owns row creation."""
+    fake_db(staged_results=[[]])           # SELECT returns no row
+    p = api.HubzeroPermissionGroupProvider.__new__(api.HubzeroPermissionGroupProvider)
+    p.env = env
+    api.HubzeroPermissionGroupProvider.__init__(p)
+    assert p.project_id is None
+    # Confirm we did NOT do an INSERT on the read-only path
+    calls = fake_db.current().cursor_obj.calls
+    assert len(calls) == 1
+    assert calls[0][0].startswith('SELECT id FROM jos_trac_project')
+
+
+def test_group_provider_init_swallows_db_error_and_leaves_project_id_none(env, monkeypatch):
+    """DB outage at Component-load time -> project_id=None, but the
+    Component still loads (get_permission_groups returns builtin groups)."""
+    def boom(_env):
+        raise RuntimeError('CMS DB unavailable')
+    monkeypatch.setattr(api, '_open_cms_connection', boom)
+    p = api.HubzeroPermissionGroupProvider.__new__(api.HubzeroPermissionGroupProvider)
+    p.env = env
+    api.HubzeroPermissionGroupProvider.__init__(p)
+    assert p.project_id is None
+    # And the get_permission_groups fast-path returns builtins (no crash)
+    assert p.get_permission_groups('alice') == ['anonymous', 'authenticated']
+
+
+def test_group_provider_get_permission_groups_returns_builtins_when_project_id_none(
+        fake_db, group_provider_factory):
+    """No project_id -> skip the DB call, return just the builtin groups.
+    Matches HubzeroPermissionStore.get_user_permissions's guard pattern."""
+    fake_db(staged_results=[[('@should_not_appear',)]])
+    p = group_provider_factory(project_id=None)
+    assert p.get_permission_groups('alice') == ['anonymous', 'authenticated']
+    # Connection was never opened
+    assert fake_db.current() is None
+
+
+# -----------------------------------------------------------------------------
 # HubzeroPermissionGroupProvider.get_permission_groups
 # -----------------------------------------------------------------------------
 
