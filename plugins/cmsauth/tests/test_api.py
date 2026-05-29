@@ -131,6 +131,60 @@ def test_authenticate_treats_missing_username_as_anonymous(sso, make_req, http_s
     assert sso.authenticate(req) is None
 
 
+# ---- reserved-username guard (must NEVER impersonate anonymous/authenticated) ---- #
+
+@pytest.mark.parametrize("payload_username", [
+    "anonymous",       # exact match -- would grant Trac's anonymous-group perms
+    "ANONYMOUS",       # case variant -- Trac's reserved name is case-insensitive
+    "Anonymous",
+    "authenticated",   # the OTHER reserved name -- "all logged-in users" group
+    "Authenticated",
+    " anonymous ",     # whitespace-wrapped -- strip before the reserved check
+    "\tanonymous\n",   # ditto, with weirder whitespace
+])
+def test_authenticate_rejects_reserved_username(
+        sso, make_req, http_stub, payload_username):
+    """If the CMS API ever returns a username equal to one of Trac's
+    reserved names ("anonymous", "authenticated"), we must NOT set
+    REMOTE_USER to it -- doing so would impersonate the bearer as
+    Trac's anonymous user or as a member of the special "authenticated"
+    group.  The plugin treats that response as anonymous instead and
+    logs a warning.  Compared case-insensitively and after stripping
+    whitespace so " Anonymous " is also blocked."""
+    import json
+    body = json.dumps({"profile": {"id": 1, "username": payload_username}}).encode("utf-8")
+    http_stub.stage_response(200, body)
+    req = make_req(cookie="jos_session=sid")
+    assert sso.authenticate(req) is None
+    # Did NOT leak the reserved name into REMOTE_USER:
+    assert "REMOTE_USER" not in req.environ
+
+
+def test_authenticate_strips_whitespace_from_real_username(
+        sso, make_req, http_stub):
+    """Defensive: if the CMS API ever returns " jdoe " (whitespace-wrapped),
+    return the stripped form so Trac's downstream comparisons (auth_cookie
+    rows keyed by name, IPermissionStore lookups by username) stay
+    well-defined.  Whitespace-sensitive equality would otherwise leave
+    the user permanently mis-identified."""
+    http_stub.stage_response(200, b'{"profile":{"id":1,"username":"  jdoe  "}}')
+    req = make_req(cookie="jos_session=sid")
+    assert sso.authenticate(req) == "jdoe"
+    assert req.environ["REMOTE_USER"] == "jdoe"
+
+
+def test_authenticate_treats_whitespace_only_username_as_anonymous(
+        sso, make_req, http_stub):
+    """A username that's only whitespace must NOT slip through -- after
+    strip() it becomes empty and Trac's authname rules treat the empty
+    string as anonymous, which would re-introduce the impersonation we
+    just closed above."""
+    http_stub.stage_response(200, b'{"profile":{"id":1,"username":"   "}}')
+    req = make_req(cookie="jos_session=sid")
+    assert sso.authenticate(req) is None
+    assert "REMOTE_USER" not in req.environ
+
+
 # ============================================================================ #
 # _call_api()
 # ============================================================================ #

@@ -122,6 +122,18 @@ DELETE-then-redirect.
 
 - **First release:** `1.0.0` (hzforge, 2026-05-28). No upstream — this
   is a new plugin written for hzforge.
+- **`1.0.2`** (2026-05-29) — one security fix in `_call_api`'s
+  response handling:
+  - **Reserved-username guard.** If the CMS API ever returns
+    `profile.username == "anonymous"` (or `"authenticated"`, or any
+    case/whitespace variant), the bearer would have been authenticated
+    AS Trac's reserved anonymous user — granting them the perms of the
+    anonymous group itself and joining the special `authenticated`
+    group. The plugin now strips whitespace, rejects reserved names
+    case-insensitively, logs a warning, and falls back to anonymous.
+    Also returns the stripped form of legitimate usernames so
+    downstream `auth_cookie` / `IPermissionStore` comparisons stay
+    well-defined.
 - **`1.0.1`** (2026-05-29) — two security fixes, both in `_redirect_back`
   / `_b64`, no behavior change for legitimate flows:
   - **Open-redirect guard** on the `?referer=` arg. Stock

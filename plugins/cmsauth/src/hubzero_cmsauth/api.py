@@ -64,6 +64,15 @@ from trac.web.auth import LoginModule
 log = logging.getLogger(__name__)
 
 
+# Usernames that Trac reserves for its own permission machinery; the CMS
+# API must NEVER cause us to set REMOTE_USER to one of these.  If it did
+# -- e.g. a corrupt jos_users row, a buggy API change, or a malicious
+# account whose profile.username is literally "anonymous" -- we'd grant
+# the bearer the permissions of the Trac anonymous/authenticated group
+# itself.  Compared case-insensitively against the stripped CMS value.
+_RESERVED_USERNAMES = frozenset(["anonymous", "authenticated"])
+
+
 # ---------------------------------------------------------------------------- #
 # HubzeroSSOLoginModule
 # ---------------------------------------------------------------------------- #
@@ -254,7 +263,20 @@ class HubzeroSSOLoginModule(LoginModule):
         if not isinstance(profile, dict):
             raise RuntimeError("CMS API response missing 'profile' object")
         username = profile.get("username")
-        return username or None
+        if not username:
+            return None
+        # Strip whitespace; reject reserved Trac usernames (anonymous /
+        # authenticated) regardless of case.  Strip BEFORE the reserved
+        # check so " Anonymous " doesn't slip through.  Returning the
+        # stripped form for non-reserved names keeps Trac's downstream
+        # username comparisons (auth_cookie lookup, permission_groups)
+        # well-defined -- they're whitespace-sensitive.
+        stripped = username.strip()
+        if not stripped or stripped.lower() in _RESERVED_USERNAMES:
+            log.warning("hubzero_cmsauth: CMS API returned reserved/empty "
+                        "username %r; treating as anonymous", username)
+            return None
+        return stripped
 
     # -- helpers ------------------------------------------------------------ #
 
