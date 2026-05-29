@@ -169,13 +169,22 @@ class HubzeroSSOLoginModule(LoginModule):
 
     def _redirect_back(self, req):
         """Override: send the user where THIS plugin wants them after /login
-        or /logout, instead of parent's same-host-referer logic."""
+        or /logout, instead of parent's same-host-referer logic.
+
+        Open-redirect guard: `?referer=` is honored ONLY if it points back
+        to the same origin (our scheme+host).  Cross-origin / protocol-
+        relative / scheme-mismatched targets fall back to the env wiki
+        home.  This mirrors stock trac.web.auth.LoginModule's same-site
+        check (auth.py:268-269); without it, an attacker could send a
+        just-logged-in user to any URL via
+        /login?referer=https://evil.com/phish."""
         if req.path_info.rstrip("/") == "/logout":
             self._redirect_to_cms(req, self.cms_logout_url,
                                   return_to=req.href.wiki())
-        # /login -- successful auth path.  Honor an explicit `referer` arg
-        # if present (matches parent's behavior), else the env wiki home.
-        target = req.args.get("referer") or req.href.wiki()
+        # /login -- successful auth path.
+        target = req.args.get("referer")
+        if not self._is_same_origin(req, target):
+            target = req.href.wiki()
         req.redirect(target)
 
     # -- CMS HTTP transport ------------------------------------------------- #
@@ -273,5 +282,50 @@ class HubzeroSSOLoginModule(LoginModule):
         req.redirect(target)
 
     @staticmethod
+    def _is_same_origin(req, target):
+        """True iff `target` is a redirect URL pointing back at OUR
+        scheme+host: either a same-host absolute URL, or a host-relative
+        path.  Used to guard `_redirect_back` against open-redirect via
+        `?referer=https://evil.com/`.
+
+        Same as stock trac.web.auth.LoginModule's check: the redirect
+        either lives under `req.base_url` (same scheme+host prefix), or
+        is a path that the browser will interpret relative to our host.
+
+        False for: None / empty / protocol-relative (`//evil.com/x`,
+        which the browser would resolve to evil.com under the current
+        scheme) / different-scheme-or-host absolute URLs."""
+        if not target:
+            return False
+        # Protocol-relative ("//example.com/x") is NOT same-origin: the
+        # browser would resolve it against the current scheme but point
+        # at example.com -- exactly the open-redirect vector we're closing.
+        if target.startswith("//"):
+            return False
+        # Host-relative path -- the browser will resolve it against our
+        # current scheme+host, so it's same-origin by construction.
+        if target.startswith("/"):
+            return True
+        # Absolute URL: must match our scheme+host exactly.  Build the
+        # same-origin prefix from the incoming request.
+        env_ = getattr(req, "environ", None) or {}
+        scheme = (env_.get("wsgi.url_scheme") or "https").lower()
+        host = env_.get("HTTP_HOST") or env_.get("SERVER_NAME") or ""
+        if not host:
+            return False
+        prefix = "%s://%s" % (scheme, host)
+        # Exact match (e.g. "https://help.hubzero.org") or anything under
+        # our root path ("https://help.hubzero.org/..."); reject lookalike
+        # hosts like "https://help.hubzero.org.evil.com" by requiring the
+        # next char after the prefix to be "/" or end-of-string.
+        return target == prefix or target.startswith(prefix + "/")
+
+    @staticmethod
     def _b64(s):
-        return base64.b64encode(s.encode("utf-8")).decode("ascii")
+        """URL-safe base64 (RFC 4648 Section 5: `-`/`_` instead of `+`/`/`).
+
+        The encoded string lands in a query parameter (`?return=<b64>`),
+        so the standard alphabet would corrupt `+` to space when the CMS
+        decodes the query string.  PHP's `base64_decode()` accepts both
+        alphabets by default, so this is safe on the receiving end."""
+        return base64.urlsafe_b64encode(s.encode("utf-8")).decode("ascii")

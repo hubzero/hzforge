@@ -29,6 +29,17 @@ import pytest
 from hubzero_cmsauth.api import HubzeroSSOLoginModule
 
 
+def _b64decode(s):
+    """Py2/Py3-safe wrapper around base64.urlsafe_b64decode.  Py2's
+    `urlsafe_b64decode` calls `s.translate(table)` with a Py2 `str`
+    translation table, which raises TypeError if `s` is unicode (and
+    every string literal in this file is unicode under
+    `from __future__ import unicode_literals`).  Coerce to ASCII bytes
+    first."""
+    return base64.urlsafe_b64decode(s.encode("ascii")
+                                    if isinstance(s, type(u"")) else s)
+
+
 # ============================================================================ #
 # authenticate()
 # ============================================================================ #
@@ -176,7 +187,7 @@ def test_do_login_redirects_to_cms_when_no_remote_user(
         sso._do_login(req)
     target = excinfo.value.url
     assert target.startswith("https://help.hubzero.org/login?return=")
-    decoded = base64.b64decode(target.split("return=", 1)[1]).decode("utf-8")
+    decoded = _b64decode(target.split("return=", 1)[1]).decode("utf-8")
     assert decoded == "/tools/hzforgetest/login"   # come back to OUR /login
 
 
@@ -244,7 +255,7 @@ def test_redirect_back_for_logout_goes_to_cms_logout(
         sso._redirect_back(req)
     target = excinfo.value.url
     assert target.startswith("https://help.hubzero.org/logout?return=")
-    decoded = base64.b64decode(target.split("return=", 1)[1]).decode("utf-8")
+    decoded = _b64decode(target.split("return=", 1)[1]).decode("utf-8")
     assert decoded == "/tools/hzforgetest/wiki"
 
 
@@ -258,15 +269,102 @@ def test_redirect_back_for_login_goes_to_env_wiki(
     assert excinfo.value.url == "/tools/hzforgetest/wiki"
 
 
-def test_redirect_back_for_login_honors_referer_arg(
+def test_redirect_back_for_login_honors_same_origin_path_referer(
         sso, make_req, RedirectDone):
-    """An explicit ?referer= arg overrides the env wiki default.  Matches
-    Trac LoginModule's behavior."""
+    """A host-relative ?referer= path (the common case from Trac chrome)
+    overrides the env wiki default.  Matches stock LoginModule's
+    behavior for same-site referers."""
     req = make_req(path_info="/login", authname="jdoe",
                    args={"referer": "/tools/hzforgetest/ticket/42"})
     with pytest.raises(RedirectDone) as excinfo:
         sso._redirect_back(req)
     assert excinfo.value.url == "/tools/hzforgetest/ticket/42"
+
+
+def test_redirect_back_for_login_honors_same_origin_absolute_referer(
+        sso, make_req, RedirectDone):
+    """A fully-qualified ?referer= URL that points back at us is also
+    honored -- some chrome serializations emit the absolute form."""
+    req = make_req(path_info="/login", authname="jdoe",
+                   args={"referer":
+                         "https://help.hubzero.org/tools/hzforgetest/ticket/42"})
+    with pytest.raises(RedirectDone) as excinfo:
+        sso._redirect_back(req)
+    assert excinfo.value.url == \
+        "https://help.hubzero.org/tools/hzforgetest/ticket/42"
+
+
+# ---- open-redirect guard (the parts that matter for security) ---- #
+
+def test_redirect_back_rejects_cross_origin_referer(
+        sso, make_req, RedirectDone):
+    """Open-redirect guard: a cross-origin ?referer= must be ignored,
+    not blindly redirected to.  Without this check, a logged-in user
+    clicking /login?referer=https://evil.com/phish lands on evil.com --
+    an authenticated open redirect, perfect phishing primitive.  Stock
+    Trac's LoginModule rejects this; our override now does too."""
+    req = make_req(path_info="/login", authname="jdoe",
+                   args={"referer": "https://evil.com/phish"})
+    with pytest.raises(RedirectDone) as excinfo:
+        sso._redirect_back(req)
+    # Falls back to env wiki -- NOT to evil.com
+    assert excinfo.value.url == "/tools/hzforgetest/wiki"
+
+
+def test_redirect_back_rejects_protocol_relative_referer(
+        sso, make_req, RedirectDone):
+    """`//evil.com/x` is a protocol-relative URL: the browser resolves
+    it under the current scheme but at evil.com.  Must be rejected as
+    cross-origin."""
+    req = make_req(path_info="/login", authname="jdoe",
+                   args={"referer": "//evil.com/phish"})
+    with pytest.raises(RedirectDone) as excinfo:
+        sso._redirect_back(req)
+    assert excinfo.value.url == "/tools/hzforgetest/wiki"
+
+
+def test_redirect_back_rejects_lookalike_host_referer(
+        sso, make_req, RedirectDone):
+    """A host that merely starts with our hostname but isn't our host --
+    `help.hubzero.org.evil.com` -- must NOT match the same-origin prefix
+    check.  Tests that the prefix comparison requires the next char to
+    be `/` (path separator) rather than allowing arbitrary continuation."""
+    req = make_req(path_info="/login", authname="jdoe",
+                   args={"referer":
+                         "https://help.hubzero.org.evil.com/phish"})
+    with pytest.raises(RedirectDone) as excinfo:
+        sso._redirect_back(req)
+    assert excinfo.value.url == "/tools/hzforgetest/wiki"
+
+
+def test_redirect_back_rejects_scheme_mismatch_referer(
+        sso, make_req, RedirectDone):
+    """`http://` referer when we serve `https://` is not same-origin --
+    the browser treats them as different origins.  Must be rejected."""
+    req = make_req(path_info="/login", authname="jdoe",
+                   args={"referer":
+                         "http://help.hubzero.org/tools/hzforgetest/wiki"})
+    with pytest.raises(RedirectDone) as excinfo:
+        sso._redirect_back(req)
+    assert excinfo.value.url == "/tools/hzforgetest/wiki"
+
+
+def test_is_same_origin_helper_unit(sso, make_req):
+    """Direct unit test of the same-origin classifier -- covers the
+    branches the _redirect_back tests already exercise, plus a few
+    inputs that aren't worth a full RedirectDone round-trip."""
+    req = make_req(path_info="/login")
+    # Truthy positive cases
+    assert sso._is_same_origin(req, "/tools/hzforgetest/wiki")
+    assert sso._is_same_origin(req, "https://help.hubzero.org")          # exact prefix
+    assert sso._is_same_origin(req, "https://help.hubzero.org/x/y")      # under prefix
+    # Falsy negative cases
+    assert not sso._is_same_origin(req, None)
+    assert not sso._is_same_origin(req, "")
+    assert not sso._is_same_origin(req, "//evil.com/x")                  # protocol-relative
+    assert not sso._is_same_origin(req, "https://evil.com/")             # cross-origin
+    assert not sso._is_same_origin(req, "http://help.hubzero.org/x")     # scheme mismatch
+    assert not sso._is_same_origin(req, "https://help.hubzero.org.evil.com/x")
 
 
 def test_redirect_back_for_logout_carries_correct_env_in_return_url(
@@ -276,7 +374,7 @@ def test_redirect_back_for_logout_carries_correct_env_in_return_url(
                    abs_base="https://help.hubzero.org/tools/bio3d")
     with pytest.raises(RedirectDone) as excinfo:
         sso._redirect_back(req)
-    decoded = base64.b64decode(
+    decoded = _b64decode(
         excinfo.value.url.split("return=", 1)[1]).decode("utf-8")
     assert decoded == "/tools/bio3d/wiki"
 
@@ -297,4 +395,20 @@ def test_cookie_header_empty_when_no_environ(sso, make_req):
 
 def test_b64_round_trip(sso):
     encoded = sso._b64("/tools/hzforgetest/wiki")
-    assert base64.b64decode(encoded).decode("utf-8") == "/tools/hzforgetest/wiki"
+    assert _b64decode(encoded).decode("utf-8") == "/tools/hzforgetest/wiki"
+
+
+def test_b64_uses_urlsafe_alphabet(sso):
+    """The standard base64 alphabet contains `+` and `/`; both turn into
+    garbage when embedded in a `?return=` query value (`+` becomes space
+    when the CMS parses the query string).  Switching to RFC 4648 Section 5
+    URL-safe base64 (which uses `-` and `_` in their place) closes that
+    class.
+
+    `"???"` is a known case: standard base64 -> `"Pz8/"` (trailing slash);
+    urlsafe -> `"Pz8_"` (trailing underscore).  The assertion is meaningful
+    BECAUSE the two alphabets disagree on this input."""
+    encoded = sso._b64("???")
+    assert encoded == "Pz8_"               # urlsafe-alphabet output
+    assert "/" not in encoded              # the security property
+    assert "+" not in encoded

@@ -122,8 +122,24 @@ DELETE-then-redirect.
 
 - **First release:** `1.0.0` (hzforge, 2026-05-28). No upstream — this
   is a new plugin written for hzforge.
+- **`1.0.1`** (2026-05-29) — two security fixes, both in `_redirect_back`
+  / `_b64`, no behavior change for legitimate flows:
+  - **Open-redirect guard** on the `?referer=` arg. Stock
+    `trac.web.auth.LoginModule` validates that the referer is same-site
+    before honoring it; the 1.0.0 override dropped that check, so
+    `/login?referer=https://evil.com/phish` would 302 a just-logged-in
+    user to evil.com. 1.0.1 introduces `_is_same_origin(req, target)`
+    (host-relative paths and same scheme+host absolute URLs are
+    honored; cross-origin, protocol-relative, scheme-mismatched, and
+    lookalike-host targets fall back to the env wiki home).
+  - **URL-safe base64** for the CMS `?return=` value. Standard base64
+    can emit `+` and `/`, both of which break query-string parsing
+    (the CMS sees space where the browser sent `+`). Switched
+    `_b64()` from `base64.b64encode` to `base64.urlsafe_b64encode`
+    (PHP's `base64_decode` accepts both alphabets, so it's safe on the
+    receiving end).
 - **Pairs with:**
-  - `hubzero-trac-mysqlauthz` 2.4.0 (`IPermissionStore` /
+  - `hubzero-trac-mysqlauthz` 2.4.1 (`IPermissionStore` /
     `IPermissionGroupProvider`) — provides Trac authorization once cmsauth
     has set the user.
   - The Apache config that hzforge writes via `hzforge install trac` — the
