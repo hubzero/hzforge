@@ -152,14 +152,9 @@ def test_ldap_bindpw_file_wins_and_strips(tmp_path, monkeypatch):
     assert hz.CTX.notes == []                 # 0600 -> no perms warning
 
 
-def test_ldap_bindpw_file_loose_perms_warns(tmp_path, monkeypatch):
-    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
-    f = tmp_path / "pw"
-    f.write_text("s3cret")
-    os.chmod(str(f), 0o644)
-    monkeypatch.setattr(hz, "ARGS", make_args(ldap_bindpw_file=str(f)), raising=False)
-    hz._ldap_bindpw()
-    assert any("chmod 600" in n for n in hz.CTX.notes)
+# NOTE: the old test_ldap_bindpw_file_loose_perms_warns (expecting a WARNING
+# for a group/other-readable bindpw file) was removed in the H2 security fix
+# -- loose perms are now FATAL.  See test_ldap_bindpw_file_loose_perms_now_fatal.
 
 
 def test_ldap_bindpw_inline_warns(monkeypatch):
@@ -624,12 +619,9 @@ def test_argparse_does_not_set_svn_source_default():
     # wandisco
     ("Installed Packages\nsubversion.x86_64  1.10.7-1.x86_64  @wandisco-svn110\n",
      "wandisco"),
-    # System / preinstalled (no @repo or @System) -> "appstream" since the
-    # only thing that puts subversion in @System on this distro is the
-    # AppStream stream itself, classified as appstream
-    ("Installed Packages\nsubversion.x86_64  1.10.2-5  @System\n",
-     "appstream"),
-    # Unknown / locally built RPM
+    # @System / unknown -> "other" (H1 fix: leave preinstalled svn alone;
+    # the dedicated @System/@anaconda cases live in
+    # test_svn_installed_source_system_is_other below)
     ("Installed Packages\nsubversion.x86_64  1.10.2-1.local  @local-repo\n",
      "other"),
 ])
