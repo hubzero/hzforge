@@ -445,6 +445,37 @@ def test_is_same_origin_helper_unit(sso, make_req):
     assert not sso._is_same_origin(req, "https://evil.com/")             # cross-origin
     assert not sso._is_same_origin(req, "http://help.hubzero.org/x")     # scheme mismatch
     assert not sso._is_same_origin(req, "https://help.hubzero.org.evil.com/x")
+    # Backslash authority obfuscation (browsers treat \ as /): "/\evil.com"
+    # resolves to "//evil.com" -> protocol-relative -> evil.com.  The 1.0.1
+    # "//" check missed these; 1.0.5 rejects any backslash.
+    assert not sso._is_same_origin(req, "/\\evil.com")
+    assert not sso._is_same_origin(req, "/\\/evil.com")
+    assert not sso._is_same_origin(req, "\\\\evil.com")
+    assert not sso._is_same_origin(req, "/path\\to\\thing")              # any backslash
+    # Control chars (browsers strip them before resolving): "/\nhttp://x"
+    # becomes "/http://x"? no -- the browser strips \n and resolves the
+    # remainder, which can point off-origin.  Reject any C0/DEL char.
+    assert not sso._is_same_origin(req, "/\thttp://evil.com")            # TAB
+    assert not sso._is_same_origin(req, "/\nhttp://evil.com")            # LF
+    assert not sso._is_same_origin(req, "/\rhttp://evil.com")            # CR
+    assert not sso._is_same_origin(req, "/\x00evil")                     # NUL
+    # ... but a legitimate same-origin path with none of the above is fine
+    assert sso._is_same_origin(req, "/tools/hzforgetest/ticket/42")
+
+
+def test_redirect_back_rejects_backslash_referer(sso, make_req, RedirectDone):
+    """Full _redirect_back path: a backslash-obfuscated referer must fall
+    back to the env wiki, NOT 302 the just-logged-in user off-origin.
+    This is the CRITICAL open-redirect that the 1.0.1 protocol-relative
+    check left open (`/\\evil.com` bypasses the `//` test)."""
+    for evil in ("/\\evil.com/phish", "/\\/evil.com", "/\thttp://evil.com",
+                 "/\nhttp://evil.com"):
+        req = make_req(path_info="/login", authname="jdoe",
+                       args={"referer": evil})
+        with pytest.raises(RedirectDone) as excinfo:
+            sso._redirect_back(req)
+        assert excinfo.value.url == "/tools/hzforgetest/wiki", \
+            "backslash/control-char referer %r was not rejected" % evil
 
 
 def test_redirect_back_for_logout_carries_correct_env_in_return_url(

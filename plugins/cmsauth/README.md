@@ -197,6 +197,18 @@ DELETE-then-redirect.
 
 - **First release:** `1.0.0` (hzforge, 2026-05-28). No upstream — this
   is a new plugin written for hzforge.
+- **`1.0.5`** (2026-05-30) — **open-redirect bypass fix (CRITICAL).**
+  The 1.0.1 `_is_same_origin` guard rejected protocol-relative `//evil.com`
+  referers but not backslash-obfuscated `/\evil.com` (browsers treat `\`
+  as `/`, so it resolves to `//evil.com` → evil.com) nor control-char
+  vectors like `/\thttp://evil.com` / `/\nhttp://evil.com` (browsers strip
+  TAB/CR/LF before resolving). A logged-in user clicking
+  `…/login?referer=/\evil.com/phish` would have been 302'd off-origin
+  while authenticated. 1.0.5 rejects any target containing a backslash or
+  any ASCII control char (C0/DEL) before the path check, and adds an
+  explicit `return` after the `/logout` redirect. New tests cover the
+  backslash + control-char vectors through both `_is_same_origin` and the
+  full `_redirect_back` path.
 - **`1.0.4`** (2026-05-29) — periodic CMS re-check, opt-in (review #4):
   - New `[hubzero_cmsauth] recheck_interval_seconds` (default `0` = off,
     back-compat).

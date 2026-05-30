@@ -238,6 +238,9 @@ class HubzeroSSOLoginModule(LoginModule):
         if req.path_info.rstrip("/") == "/logout":
             self._redirect_to_cms(req, self.cms_logout_url,
                                   return_to=req.href.wiki())
+            return   # defensive: _redirect_to_cms raises RequestDone, but
+                     # don't fall through to the /login referer logic if a
+                     # future Trac ever makes req.redirect() return.
         # /login -- successful auth path.
         target = req.args.get("referer")
         if not self._is_same_origin(req, target):
@@ -524,8 +527,24 @@ class HubzeroSSOLoginModule(LoginModule):
 
         False for: None / empty / protocol-relative (`//evil.com/x`,
         which the browser would resolve to evil.com under the current
-        scheme) / different-scheme-or-host absolute URLs."""
+        scheme) / backslash- or control-char-obfuscated authority
+        (`/\\evil.com`, `/\\thttp://evil.com`) / different-scheme-or-host
+        absolute URLs."""
         if not target:
+            return False
+        # Browsers strip ASCII control chars (TAB/CR/LF/NUL and the rest of
+        # C0, plus DEL) from a URL before resolving it, so a value like
+        # "/\thttp://evil.com" or "/\nhttp://evil.com" can resolve OFF-origin
+        # after the browser strips the control char.  Reject any control
+        # char outright -- none belong in a legitimate same-origin referer.
+        if any(ord(c) < 0x20 or ord(c) == 0x7f for c in target):
+            return False
+        # Browsers treat backslash as equivalent to "/" in the authority, so
+        # "/\evil.com" resolves to "//evil.com" -> protocol-relative ->
+        # evil.com.  A backslash never appears in a legitimate same-origin
+        # path or URL referer; reject outright.  (This is the bypass the
+        # 1.0.1 "//" check missed -- see test_redirect_back_rejects_*.)
+        if "\\" in target:
             return False
         # Protocol-relative ("//example.com/x") is NOT same-origin: the
         # browser would resolve it against the current scheme but point
