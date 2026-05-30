@@ -251,6 +251,41 @@ def test_call_api_honors_explicit_port_in_host_header(sso, make_req, http_stub):
     assert conn.calls[0]["headers"]["Host"] == "help.hubzero.org:8443"
 
 
+# ---- _split_host_port: IPv6 + edge cases (1.0.6 fix) ---- #
+
+@pytest.mark.parametrize("host_header,scheme,exp_host,exp_port", [
+    ("help.hubzero.org",        "https", "help.hubzero.org", 443),
+    ("help.hubzero.org",        "http",  "help.hubzero.org", 80),
+    ("help.hubzero.org:8443",   "https", "help.hubzero.org", 8443),
+    ("internal.lab:8080",       "http",  "internal.lab",     8080),
+    # Bracketed IPv6 literal: the naive partition(":") mangled host to "[".
+    ("[::1]",                   "https", "::1",              443),
+    ("[::1]:8443",              "https", "::1",              8443),
+    ("[2001:db8::1]:80",        "http",  "2001:db8::1",      80),
+    # Non-integer port -> scheme default
+    ("host:notaport",          "https", "host",             443),
+    ("[::1]:notaport",         "http",  "::1",              80),
+    # Malformed bracket -> best-effort, scheme default
+    ("[::1",                    "https", "[::1",             443),
+])
+def test_split_host_port(sso, host_header, scheme, exp_host, exp_port):
+    assert sso._split_host_port(host_header, scheme) == (exp_host, exp_port)
+
+
+def test_call_api_handles_ipv6_host(sso, make_req, http_stub):
+    """End-to-end: an IPv6 HTTP_HOST connects to the bracket-stripped host,
+    not the mangled '['.  (Latent in the loopback deployment, but a real
+    parse bug before 1.0.6.)"""
+    req = make_req(cookie="jos_session=sid")
+    req.environ["HTTP_HOST"] = "[::1]:8443"
+    sso.authenticate(req)
+    conn = http_stub.last_conn
+    assert conn.host == "::1"
+    assert conn.port == 8443
+    # The forwarded Host header keeps the bracketed form Apache expects.
+    assert conn.calls[0]["headers"]["Host"] == "[::1]:8443"
+
+
 # ============================================================================ #
 # _do_login()
 # ============================================================================ #
@@ -720,6 +755,54 @@ def test_authenticate_recheck_invalidates_on_deactivation(
     assert any(sql.startswith("DELETE FROM auth_cookie")
                for sql, _p in env.db_transactions)
     assert "trac_auth" not in req.incookie
+
+
+def test_authenticate_recheck_skips_on_auth_cookie_db_error(
+        sso, env, make_req, http_stub):
+    """1.0.6: if the LOCAL auth_cookie lookup ERRORS during a recheck (a
+    transient SQLite blip, NOT a CMS signal), the recheck is skipped --
+    the session is left intact (no DELETE, trac_auth stays) and the
+    recheck cookie is NOT re-stamped so the next request retries.  Logging
+    a user out because the local session table hiccuped would be a
+    self-inflicted outage."""
+    sso.recheck_interval_seconds = 300
+    http_stub.stage_response(200, b'{"profile":{"id":1,"username":"alice"}}')
+
+    def boom(sql, params=None):
+        raise RuntimeError("SQLite is locked")
+    env.db_query = boom
+
+    class _AM(object): value = "abc"
+    class _CM(object): value = str(int(_time.time() - 1000))   # stale
+    req = make_req(cookie="trac_auth=abc; jos_session=sid")
+    req.incookie["trac_auth"] = _AM()
+    req.incookie["hubzero_cms_check"] = _CM()
+    sso.authenticate(req)
+    # NOT invalidated: no DELETE, cookie still present
+    assert env.db_transactions == []
+    assert "trac_auth" in req.incookie
+    # NOT re-stamped -> next request will retry the recheck
+    assert "hubzero_cms_check" not in req.outcookie
+
+
+def test_recheck_expiry_cookie_has_secure_and_httponly(
+        sso, env, make_req, http_stub):
+    """1.0.6: the expiring hubzero_cms_check cookie set on invalidation
+    carries the same Secure + HttpOnly attributes as the live one, so
+    browsers reliably honor the delete and the Set-Cookie is consistent."""
+    sso.recheck_interval_seconds = 300
+    http_stub.stage_response(200, b'{"profile":{"id":1,"username":"alyssa"}}')  # rename
+    env.db_query_responses.append([("alice",)])
+    class _AM(object): value = "abc"
+    class _CM(object): value = str(int(_time.time() - 1000))
+    req = make_req(cookie="trac_auth=abc; jos_session=sid")
+    req.incookie["trac_auth"] = _AM()
+    req.incookie["hubzero_cms_check"] = _CM()
+    sso.authenticate(req)
+    morsel = req.outcookie["hubzero_cms_check"]
+    assert morsel["max-age"] == 0          # expiring
+    assert morsel["httponly"]              # truthy
+    assert morsel["secure"]                # https request -> Secure set
 
 
 # --- _do_login stamps the recheck cookie on a fresh login --- #

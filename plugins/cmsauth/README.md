@@ -197,6 +197,22 @@ DELETE-then-redirect.
 
 - **First release:** `1.0.0` (hzforge, 2026-05-28). No upstream — this
   is a new plugin written for hzforge.
+- **`1.0.6`** (2026-05-30) — three robustness fixes from the security
+  review (no behavior change for the happy path):
+  - **IPv6 `HTTP_HOST` parse.** `_call_api` split host/port with a naive
+    `partition(":")` that mangled bracketed IPv6 literals (`[::1]:8443`
+    → host `"["`). New `_split_host_port` handles brackets, missing/
+    non-integer ports. Latent in the loopback deployment, but a real
+    parse bug.
+  - **No self-inflicted logout on a local DB blip.** During a periodic
+    recheck, if the *local* `auth_cookie` lookup errored (a transient
+    SQLite hiccup, unrelated to the CMS) the session was invalidated —
+    logging the user out for no good reason. Now a local lookup error
+    skips the recheck (session left intact, retried next interval);
+    only a genuine no-row result or a CMS deauth/rename invalidates.
+  - **Recheck-expiry cookie hygiene.** The expiring `hubzero_cms_check`
+    cookie now carries the same `HttpOnly` + `Secure` attributes as the
+    live one.
 - **`1.0.5`** (2026-05-30) — **open-redirect bypass fix (CRITICAL).**
   The 1.0.1 `_is_same_origin` guard rejected protocol-relative `//evil.com`
   referers but not backslash-obfuscated `/\evil.com` (browsers treat `\`

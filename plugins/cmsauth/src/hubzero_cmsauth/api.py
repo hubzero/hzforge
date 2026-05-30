@@ -269,17 +269,9 @@ class HubzeroSSOLoginModule(LoginModule):
         env_ = getattr(req, "environ", None) or {}
         scheme = (env_.get("wsgi.url_scheme") or "https").lower()
         host_header = env_.get("HTTP_HOST") or env_.get("SERVER_NAME") or "localhost"
-        # HTTP_HOST may carry an explicit port ("foo:8443"); split it off
-        # for the connect target but keep it intact for the Host header.
-        if ":" in host_header:
-            host, _, port_s = host_header.partition(":")
-            try:
-                port = int(port_s)
-            except ValueError:
-                port = 443 if scheme == "https" else 80
-        else:
-            host = host_header
-            port = 443 if scheme == "https" else 80
+        # Split host:port for the connect target, keeping host_header intact
+        # for the forwarded Host header.
+        host, port = self._split_host_port(host_header, scheme)
         if scheme == "https":
             ctx = ssl.create_default_context()
             if not self.verify_tls:
@@ -445,8 +437,18 @@ class HubzeroSSOLoginModule(LoginModule):
         flaky network briefly degrades UX rather than allowing stale
         auth.  Acceptable because the alternative ("trust the cookie
         even when CMS is silent") is what review #4 exists to fix."""
+        # Resolve the Trac-side name FIRST.  If the local auth_cookie lookup
+        # errors (a transient SQLite blip, NOT a CMS signal), skip this
+        # recheck entirely: don't invalidate, and don't re-stamp the recheck
+        # cookie -- so the next request retries.  Logging a user out because
+        # the LOCAL session table hiccuped would be a self-inflicted outage.
+        try:
+            trac_name = self._authname_from_trac_auth(req)
+        except Exception as e:                                # noqa: BLE001
+            log.warning("hubzero_cmsauth: auth_cookie lookup failed during "
+                        "recheck (%s); leaving session as-is, will retry", e)
+            return
         new_name = self._authenticate_via_cms(req)
-        trac_name = self._authname_from_trac_auth(req)
         if new_name is None or new_name != trac_name:
             log.info("hubzero_cmsauth: invalidating trac_auth (was %r, "
                      "CMS now says %r); user will be forced through /login",
@@ -456,20 +458,22 @@ class HubzeroSSOLoginModule(LoginModule):
         self._stamp_recheck(req)
 
     def _authname_from_trac_auth(self, req):
-        """Look up the name associated with the `trac_auth` cookie in
-        Trac's own auth_cookie table.  Returns the name or None."""
+        """Look up the name associated with the `trac_auth` cookie in Trac's
+        own auth_cookie table.  Returns the name, or None if there's no
+        matching row (genuinely-unknown cookie).
+
+        RAISES on a DB error -- the caller (`_do_periodic_recheck`) must be
+        able to distinguish "no such row" (a real reason to invalidate the
+        session) from "the local auth_cookie query failed" (a transient
+        SQLite blip unrelated to the CMS -- must NOT log the user out)."""
         try:
             cookie_value = req.incookie["trac_auth"].value
         except (KeyError, AttributeError):
             return None
-        try:
-            for row in self.env.db_query(
-                    "SELECT name FROM auth_cookie WHERE cookie=%s",
-                    (cookie_value,)):
-                return row[0]
-        except Exception as e:                                # noqa: BLE001
-            log.warning("hubzero_cmsauth: auth_cookie lookup failed (%s); "
-                        "treating as no match", e)
+        for row in self.env.db_query(
+                "SELECT name FROM auth_cookie WHERE cookie=%s",
+                (cookie_value,)):
+            return row[0]
         return None
 
     def _invalidate_trac_auth(self, req):
@@ -497,10 +501,17 @@ class HubzeroSSOLoginModule(LoginModule):
         except (KeyError, TypeError):
             pass
         self._expire_cookie(req)
-        # Expire our sibling cookie too (set Max-Age=0).
+        # Expire our sibling cookie too (Max-Age=0), with the SAME attributes
+        # _stamp_recheck set (path + HttpOnly + Secure on https) -- some
+        # browsers only honor a delete cookie whose attributes match the
+        # original, and it keeps the expiring Set-Cookie consistent.
         req.outcookie[_RECHECK_COOKIE] = ""
         req.outcookie[_RECHECK_COOKIE]["path"] = self._cookie_path(req)
         req.outcookie[_RECHECK_COOKIE]["max-age"] = 0
+        req.outcookie[_RECHECK_COOKIE]["httponly"] = True
+        env_ = getattr(req, "environ", None) or {}
+        if (env_.get("wsgi.url_scheme") or "https") == "https":
+            req.outcookie[_RECHECK_COOKIE]["secure"] = True
 
     @staticmethod
     def _cookie_path(req):
