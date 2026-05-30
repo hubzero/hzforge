@@ -730,24 +730,68 @@ def test_ensure_subversion_packages_skips_switch_when_already_target(monkeypatch
     assert switches == []                              # no switch triggered
 
 
-def test_ensure_subversion_packages_switches_on_mismatch(monkeypatch):
-    """Installed source != target -- switch + reinstall."""
-    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream"), raising=False)
-    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)   # CTX.dry == False
+def test_ensure_subversion_packages_switches_on_source_mismatch(monkeypatch):
+    """Installed source != target source -- switch + reinstall."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream",
+                                              python="py27"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
     monkeypatch.setattr(hz, "_SVN_PKGS_DONE", False, raising=False)
     monkeypatch.setattr(hz, "_svn_installed_source", lambda: "wandisco")
+    monkeypatch.setattr(hz, "_svn_installed_stream", lambda: None)
     # After the switch removes the packages, rpm_installed returns False
     monkeypatch.setattr(hz, "rpm_installed", lambda p: False)
     switches, installs = [], []
     monkeypatch.setattr(hz, "_switch_svn_source",
-                        lambda fr, to: switches.append((fr, to)))
+                        lambda fr, to, from_stream=None, to_stream=None:
+                            switches.append((fr, to, from_stream, to_stream)))
     monkeypatch.setattr(hz, "_enable_svn_source", lambda: None)
     monkeypatch.setattr(hz, "dnf_install",
                         lambda pkgs, **kw: installs.append(list(pkgs)))
     hz.ensure_subversion_packages()
-    assert switches == [("wandisco", "appstream")]
-    # And the reinstall pulls subversion + mod_dav_svn from the new source
+    assert switches == [("wandisco", "appstream", None, "1.10")]
     assert any("subversion" in i for i in installs)
+
+
+def test_ensure_subversion_packages_switches_on_stream_mismatch(monkeypatch):
+    """Same source (appstream) but different module stream -- still a
+    switch.  py27 -> py36 keeps --svn-source=appstream but flips the
+    stream from 1.10 to 1.14, and we have to dnf module reset+enable to
+    get the new module's packages installable."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream",
+                                              python="py36"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_SVN_PKGS_DONE", False, raising=False)
+    monkeypatch.setattr(hz, "_svn_installed_source", lambda: "appstream")
+    monkeypatch.setattr(hz, "_svn_installed_stream", lambda: "1.10")   # currently on 1.10
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: False)
+    switches, installs = [], []
+    monkeypatch.setattr(hz, "_switch_svn_source",
+                        lambda fr, to, from_stream=None, to_stream=None:
+                            switches.append((fr, to, from_stream, to_stream)))
+    monkeypatch.setattr(hz, "_enable_svn_source", lambda: None)
+    monkeypatch.setattr(hz, "dnf_install",
+                        lambda pkgs, **kw: installs.append(list(pkgs)))
+    hz.ensure_subversion_packages()
+    # Same source on both sides, but 1.10 -> 1.14 stream switch
+    assert switches == [("appstream", "appstream", "1.10", "1.14")]
+
+
+def test_ensure_subversion_packages_skips_switch_when_stream_matches(monkeypatch):
+    """appstream + 1.10 already installed AND target is also appstream:1.10
+    (py27 path) -- no switch needed."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream",
+                                              python="py27"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_SVN_PKGS_DONE", False, raising=False)
+    monkeypatch.setattr(hz, "_svn_installed_source", lambda: "appstream")
+    monkeypatch.setattr(hz, "_svn_installed_stream", lambda: "1.10")
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: True)
+    switches = []
+    monkeypatch.setattr(hz, "_switch_svn_source",
+                        lambda fr, to, from_stream=None, to_stream=None:
+                            switches.append((fr, to, from_stream, to_stream)))
+    hz.ensure_subversion_packages()
+    assert switches == []
 
 
 def test_ensure_subversion_packages_does_not_switch_other_source(monkeypatch):
@@ -764,3 +808,82 @@ def test_ensure_subversion_packages_does_not_switch_other_source(monkeypatch):
                         lambda fr, to: switches.append((fr, to)))
     hz.ensure_subversion_packages()
     assert switches == []
+
+
+# --- _svn_installed_stream + _svn_target_stream + PY svn fields --- #
+
+def test_py_dict_carries_svn_module_stream_and_binding_pkg():
+    """The matrix dict now carries the AppStream module stream + Py
+    binding package name per Python.  These drive _svn_target_stream()
+    and the binding install line in ensure_subversion_packages()."""
+    assert hz.PY["py27"]["svn_module_stream"] == "1.10"
+    assert hz.PY["py27"]["svn_python_pkg"]    == "subversion-python"
+    assert hz.PY["py36"]["svn_module_stream"] == "1.14"
+    assert hz.PY["py36"]["svn_python_pkg"]    == "python3-subversion"
+
+
+@pytest.mark.parametrize("dnf_output,expected", [
+    # AppStream 1.10 module
+    ("Installed Packages\nsubversion.x86_64  1.10.2-5.module+el8.3.0  @appstream\n",
+     "1.10"),
+    # AppStream 1.14 module
+    ("Installed Packages\nsubversion.x86_64  1.14.1-2.module+el8.7.0  @appstream\n",
+     "1.14"),
+    # wandisco -- version is 1.10.7 (we still parse it but caller treats as None)
+    ("Installed Packages\nsubversion.x86_64  1.10.7-1.x86_64  @wandisco-svn110\n",
+     "1.10"),
+    # Unknown version -- not classifiable as 1.10 or 1.14
+    ("Installed Packages\nsubversion.x86_64  1.9.7-3.x86_64  @other-repo\n",
+     None),
+])
+def test_svn_installed_stream_parses_version(monkeypatch, dnf_output, expected):
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: p == "subversion")
+    monkeypatch.setattr(hz, "_out", lambda cmd: dnf_output)
+    assert hz._svn_installed_stream() == expected
+
+
+def test_svn_installed_stream_returns_none_when_not_installed(monkeypatch):
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: False)
+    assert hz._svn_installed_stream() is None
+
+
+@pytest.mark.parametrize("source,python,expected", [
+    # appstream + py27 -> subversion:1.10 module
+    ("appstream", "py27", "1.10"),
+    # appstream + py36 -> subversion:1.14 module (ships python3-subversion)
+    ("appstream", "py36", "1.14"),
+    # wandisco -- non-modular, no stream concept
+    ("wandisco",  "py27", None),
+])
+def test_svn_target_stream_resolves_from_python(monkeypatch, source, python, expected):
+    monkeypatch.setattr(hz, "ARGS",
+                        make_args(svn_source=source, python=python),
+                        raising=False)
+    assert hz._svn_target_stream() == expected
+
+
+def test_switch_svn_source_removes_both_py_bindings(monkeypatch, tmp_path):
+    """When switching state, ALL possible Py binding RPMs must be removed
+    (both subversion-python AND python3-subversion if present), since the
+    OLD binding's libsvn version won't match the new core libs once they
+    cut over to a different stream."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream",
+                                              python="py36"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "WANDISCO_REPO_PATH", str(tmp_path / "x.repo"))
+    # Both bindings + the core packages "installed" on this fake host
+    monkeypatch.setattr(hz, "rpm_installed",
+                        lambda p: p in ("subversion", "mod_dav_svn",
+                                        "subversion-python",
+                                        "python3-subversion"))
+    monkeypatch.setattr(hz, "_svn_module_stream", lambda: "1.10")
+    cmds = []
+    monkeypatch.setattr(hz, "run", lambda cmd, **kw: cmds.append(list(cmd)))
+    hz._switch_svn_source("appstream", "appstream",
+                          from_stream="1.10", to_stream="1.14")
+    remove_cmd = next(c for c in cmds if c[:3] == ["dnf", "-y", "remove"])
+    # ALL four are in the remove list (subversion, mod_dav_svn, and both bindings)
+    assert "subversion" in remove_cmd
+    assert "mod_dav_svn" in remove_cmd
+    assert "subversion-python" in remove_cmd
+    assert "python3-subversion" in remove_cmd

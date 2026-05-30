@@ -88,6 +88,19 @@ PY = {
         "modwsgi_rpm":      None,
         "modwsgi_conf":     "/etc/httpd/conf.modules.d/10-wsgi.conf",
         "build_deps":       ["gcc", "python2-devel", "httpd-devel"],
+        # AppStream subversion module stream paired with this Python.  py27
+        # wants 1.10 because the 1.14 module dropped Py2 bindings; py36 wants
+        # 1.14 because that's where AppStream first ships python3-subversion.
+        # Resolved by ARGS in _svn_target_stream() so an explicit
+        # --svn-source wandisco still bypasses streams entirely.
+        "svn_module_stream": "1.10",
+        # The Python SWIG bindings package for this Python.  py27 keeps
+        # subversion-python (Py2 bindings from hubzero-julian -- Rocky 8
+        # AppStream dropped Py2 bindings, no system alternative exists).
+        # py36 switches to python3-subversion (Py3 bindings, in the same
+        # AppStream subversion:1.14 module as the rest of the subversion
+        # packages -- no third-party repo needed).
+        "svn_python_pkg":   "subversion-python",
     },
     "py36": {
         "py":               "python3",
@@ -99,6 +112,8 @@ PY = {
         # Owned by the python3-mod_wsgi RPM; hzforge does not write or delete it.
         "modwsgi_conf":     "/etc/httpd/conf.modules.d/10-wsgi-python3.conf",
         "build_deps":       [],
+        "svn_module_stream": "1.14",
+        "svn_python_pkg":   "python3-subversion",
     },
 }
 
@@ -475,7 +490,13 @@ def _enable_svn_source():
     """Make subversion-* installable for the svn SERVICE.  (The trac stack no
     longer needs this -- hzforge skips the `hubzero-trac` metapackage, whose
     %post pip-installed subvertpy was the only reason subversion-devel was
-    pulled.) Does NOT install anything itself."""
+    pulled.) Does NOT install anything itself.
+
+    For AppStream, picks the module stream matching --python:
+      py27 -> subversion:1.10 (the only stream with Py2 bindings via
+              hubzero-julian-compatible libsvn 1.10.x SONAME .so.0)
+      py36 -> subversion:1.14 (the first AppStream stream that ships
+              python3-subversion in the same module)"""
     if ARGS.svn_source == "wandisco":
         ensure_wandisco_repo()
         # Only reset if a module stream is actually enabled; with module_hotfixes=1
@@ -485,10 +506,17 @@ def _enable_svn_source():
             run(["dnf", "-y", "module", "reset", "subversion"], check=False)
         else:
             log("subversion module: no stream enabled -> no reset needed")
-    elif _svn_module_stream() != "1.10":
-        run(["dnf", "-y", "module", "enable", "subversion:1.10"], check=False)
+        return
+    target_stream = _svn_target_stream()
+    if _svn_module_stream() != target_stream:
+        # Reset before enable so a different stream gets cleared first
+        # (dnf won't switch streams without an explicit reset).
+        if _svn_module_stream():
+            run(["dnf", "-y", "module", "reset", "subversion"], check=False)
+        run(["dnf", "-y", "module", "enable",
+             f"subversion:{target_stream}"], check=False)
     else:
-        log("subversion module: 1.10 already enabled")
+        log(f"subversion module: {target_stream} already enabled")
 
 
 def _svn_installed_source():
@@ -498,6 +526,7 @@ def _svn_installed_source():
     Parses `dnf list --installed subversion`, which prints rows like:
 
         subversion.x86_64  1.10.2-5.module+el8.3.0+225+...  @appstream
+        subversion.x86_64  1.14.1-2.module+el8.7.0+1066+...  @appstream
         subversion.x86_64  1.10.7-1.x86_64                  @wandisco-svn110
 
     The `@<repo>` suffix is the install-time source.  `@System` / `@anaconda`
@@ -518,20 +547,67 @@ def _svn_installed_source():
     return "other"
 
 
-def _switch_svn_source(from_source, to_source):
-    """Clean cutover from the currently-installed subversion source to the
-    target.  Removes `subversion` + `mod_dav_svn` (the two packages that
-    actually differ between sources), resets the dnf module stream so the
-    target can be picked freely, writes/removes the wandisco repo file as
-    needed, and enables the AppStream module stream when switching to it.
-    Leaves `subversion-python` untouched -- the SWIG bindings come from
-    hubzero-julian and aren't tied to the subversion source.
+def _svn_installed_stream():
+    """If the installed `subversion` came from an AppStream subversion
+    module, return the stream as "1.10" / "1.14".  Returns None if the
+    package isn't installed, isn't a 1.10/1.14 module build, or came from
+    wandisco (which is non-modular).
 
-    The actual reinstall happens AFTER this returns, in the normal
-    `ensure_subversion_packages()` "what's missing" path -- once the old
-    packages are gone, they get pulled from the new source."""
-    step(f"Subversion source switch: {from_source} -> {to_source}")
-    pkgs_to_remove = [p for p in ("mod_dav_svn", "subversion") if rpm_installed(p)]
+    Parses the package version: `1.10.x` -> "1.10", `1.14.x` -> "1.14".
+    Used by ensure_subversion_packages() to decide whether the installed
+    stream matches the matrix-derived target stream."""
+    if not rpm_installed("subversion"):
+        return None
+    out = _out(["dnf", "list", "--installed", "subversion"])
+    m = re.search(r"^subversion\.\S+\s+(\S+)\s+@", out, re.M)
+    if not m:
+        return None
+    ver = m.group(1)
+    if ver.startswith("1.10"):
+        return "1.10"
+    if ver.startswith("1.14"):
+        return "1.14"
+    return None
+
+
+def _svn_target_stream():
+    """The AppStream subversion module stream that pairs with the current
+    --python.  None when --svn-source isn't "appstream" (wandisco is
+    non-modular).  Reads from PY[ARGS.python]["svn_module_stream"]."""
+    if ARGS.svn_source != "appstream":
+        return None
+    return PY[ARGS.python]["svn_module_stream"]
+
+
+def _switch_svn_source(from_source, to_source, from_stream=None, to_stream=None):
+    """Clean cutover from one subversion state to another.  State is the
+    (source, stream) pair, where source is "wandisco" / "appstream" and
+    stream is the AppStream module stream ("1.10" / "1.14") or None
+    (wandisco is non-modular; stream is unused there).
+
+    Steps:
+      1. dnf remove the packages tied to the source/stream: subversion,
+         mod_dav_svn, AND the matching Python SWIG bindings (otherwise the
+         binding from the old stream sticks around and mismatches the new
+         libsvn).
+      2. dnf module reset subversion (to clear any locked-in stream).
+      3. Repo housekeeping: write the wandisco repo file when switching TO
+         wandisco; remove it when switching AWAY.
+      4. Leave the dnf module enable to _enable_svn_source() in the
+         normal reinstall path below.
+
+    Reinstall happens AFTER this returns, in `ensure_subversion_packages()`
+    -- once the old packages are gone, the "what's missing" branch pulls
+    them from the new source/stream."""
+    fmt_state = lambda src, strm: src + (f":{strm}" if strm else "")
+    step(f"Subversion state switch: {fmt_state(from_source, from_stream)} "
+         f"-> {fmt_state(to_source, to_stream)}")
+    # Remove subversion + mod_dav_svn + EVERY Python binding RPM that could
+    # have been installed (both py-version bindings) -- on a matrix switch
+    # the OLD binding's libsvn version won't match the new core libs.
+    py_binding_pkgs = ("subversion-python", "python3-subversion")
+    pkgs_to_remove = [p for p in ("mod_dav_svn", "subversion") + py_binding_pkgs
+                      if rpm_installed(p)]
     if pkgs_to_remove:
         run(["dnf", "-y", "remove"] + pkgs_to_remove)
     if _svn_module_stream():
@@ -541,9 +617,9 @@ def _switch_svn_source(from_source, to_source):
     if to_source == "wandisco":
         ensure_wandisco_repo()
     elif from_source == "wandisco" and to_source == "appstream":
-        # Drop the wandisco repo file so AppStream's module:1.10 isn't
+        # Drop the wandisco repo file so AppStream's module isn't
         # shadowed on future dnf operations.  `_enable_svn_source()` will
-        # re-enable subversion:1.10 below; that gates the AppStream pick.
+        # enable the target stream below.
         if os.path.exists(WANDISCO_REPO_PATH):
             if CTX.dry:
                 log(f"[dry-run] rm {WANDISCO_REPO_PATH}")
@@ -557,36 +633,52 @@ _SVN_PKGS_DONE = False
 
 def ensure_subversion_packages():
     """svn SERVICE package set: subversion + mod_dav_svn (chosen source) + the
-    subversion-python SWIG bindings (from hubzero).  Installing these also
-    lights up Trac's repo browser.
+    matching Python SWIG bindings (`subversion-python` for py27 from
+    hubzero-julian; `python3-subversion` for py36 from the AppStream
+    subversion:1.14 module).  Installing these also lights up Trac's repo
+    browser.
 
-    Switches sources when the installed `subversion` came from a different
-    repo than `--svn-source` resolves to (see _switch_svn_source).  This
-    keeps the install in sync with the matrix: changing --trac-handler
-    flips the default --svn-source, which then forces a clean cutover."""
+    Switches state when either the installed source OR the installed
+    AppStream module stream differs from the matrix-derived target.  A
+    matrix change (e.g. --trac-handler mod_python -> mod_wsgi, or --python
+    py27 -> py36) forces a clean cutover -- see _switch_svn_source."""
     global _SVN_PKGS_DONE
     if _SVN_PKGS_DONE:
         return
     _SVN_PKGS_DONE = True
-    current = _svn_installed_source()
-    target = ARGS.svn_source
-    if current is not None and current != target and current != "other":
-        # Mismatch -- clean cutover.  "other" means the source can't be
-        # classified (e.g. locally-built RPM), in which case we leave it
-        # alone rather than guess.
-        _switch_svn_source(current, target)
+    current_source = _svn_installed_source()
+    target_source  = ARGS.svn_source
+    current_stream = _svn_installed_stream() if current_source == "appstream" else None
+    target_stream  = _svn_target_stream()    # None unless target is appstream
+    # Three reasons to switch:
+    #   (a) different source (wandisco vs appstream)
+    #   (b) same source (appstream) but different stream (1.10 vs 1.14)
+    #   (c) "other" -- skip (operator's locally-built setup, don't blow away)
+    mismatch = (
+        current_source is not None
+        and current_source != "other"
+        and (current_source != target_source
+             or (current_source == "appstream"
+                 and current_stream != target_stream))
+    )
+    if mismatch:
+        _switch_svn_source(current_source, target_source,
+                           from_stream=current_stream,
+                           to_stream=target_stream)
         if CTX.dry:
-            # In dry-run mode `_switch_svn_source` only LOGGED the dnf
-            # remove; the rpm state didn't actually change, so falling
-            # through to the "what's missing" install path would emit
-            # a misleading "subversion packages already installed".
-            # Log the would-install intent explicitly and return.
+            # rpm state didn't actually change in dry-run; falling through
+            # to the "what's missing" install path would emit a misleading
+            # "subversion packages already installed".  Log the would-
+            # install intent explicitly and return.
+            tgt_label = (f"@appstream subversion:{target_stream}"
+                         if target_source == "appstream" else f"@{target_source}")
             log(f"[dry-run] would reinstall subversion + mod_dav_svn "
-                f"from @{target} after the switch")
-            log(f"[dry-run] would reinstall subversion-python from "
-                f"hubzero-julian")
+                f"from {tgt_label} after the switch")
+            log(f"[dry-run] would reinstall "
+                f"{PY[ARGS.python]['svn_python_pkg']} (Py SWIG bindings)")
             return
-    need = [p for p in ("subversion", "mod_dav_svn", "subversion-python")
+    binding_pkg = PY[ARGS.python]["svn_python_pkg"]
+    need = [p for p in ("subversion", "mod_dav_svn", binding_pkg)
             if not rpm_installed(p)]
     if not need:
         log("subversion packages already installed")
@@ -595,8 +687,11 @@ def ensure_subversion_packages():
     svc = [p for p in ("subversion", "mod_dav_svn") if p in need]
     if svc:                                         # subversion + mod_dav_svn from chosen source
         dnf_install(svc, enablerepo=_svn_repo())
-    if "subversion-python" in need:                # Py2 SWIG bindings, always from hubzero
-        dnf_install(["subversion-python"])
+    if binding_pkg in need:
+        # py27: subversion-python from hubzero-julian (no enablerepo).
+        # py36: python3-subversion from the same AppStream subversion:1.14
+        #       module enabled above (no enablerepo needed).
+        dnf_install([binding_pkg])
 
 
 # ---------------------------------------------------------------------------- #
