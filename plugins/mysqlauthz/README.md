@@ -12,7 +12,7 @@ install in the Python site-packages serves every Trac env on the host.
 
 ## Status
 
-This directory is the source of **`hubzero-trac-mysqlauthz` 2.4.3** — the
+This directory is the source of **`hubzero-trac-mysqlauthz` 2.4.4** — the
 hzforge release that supersedes upstream 2.2.5 with a dual-target Py2.7 +
 Py3.x wheel and a set of audit-driven fixes.  The version jump (2.2.5 → 2.4.0)
 signals real behavior change (parameterized SQL, connection-management
@@ -21,7 +21,9 @@ patch level; 2.4.1 follows up with one regression fix (hzforge.6); 2.4.2
 adds the opt-in `[hubzero] fail_closed` operational knob (hzforge.7); 2.4.3
 adds a CMS-DB-down metanav banner (visible to logged-in users) plus
 `log.warning` calls in grant/revoke when the user/group can't be found
-in `jos_users`/`jos_xgroups` (hzforge.8).
+in `jos_users`/`jos_xgroups` (hzforge.8); 2.4.4 adds a lazy `project_id`
+re-resolve (recover @group memberships after a startup-time CMS outage
+without a worker restart) and an empty-permissions guard (hzforge.9).
 
 | Concern | Status |
 |---|---|

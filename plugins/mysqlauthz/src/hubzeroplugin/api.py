@@ -338,6 +338,12 @@ class HubzeroPermissionStore(Component):
         # appended.  Passed as a single parameter tuple so the driver does
         # the quoting.
         permissions = list(permissions)
+        if not permissions:
+            # An empty set would build `... action IN () ...`, a MySQL syntax
+            # error (harmless degrade-to-empty when fail_closed=False, but a
+            # confusing 500 when fail_closed=True, and a needless DB hit
+            # either way).  No permissions requested -> no users match.
+            return list(result)
         placeholders = ','.join(['%s'] * len(permissions))
         params = tuple(permissions) + (self.project_id,)
         try:

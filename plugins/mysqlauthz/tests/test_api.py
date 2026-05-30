@@ -496,3 +496,75 @@ def test_grant_permission_does_not_warn_on_known_user(fake_db, store):
     store.grant_permission('alice', 'TICKET_VIEW')
     warnings = [r for r in store.env.log.records if r[0] == 'warning']
     assert warnings == []
+
+
+# --- 2.4.4: empty-permissions guard (avoid `IN ()` MySQL syntax error) --- #
+
+def test_get_users_with_permissions_empty_returns_empty_no_db(fake_db, store):
+    """An empty permission set must NOT build `... action IN () ...` (a MySQL
+    syntax error).  Short-circuit to [] without touching the DB."""
+    fake_db(staged_results=[])
+    assert store.get_users_with_permissions([]) == []
+    # No connection opened -> the guard returned before any query
+    assert fake_db.current() is None
+
+
+# --- 2.4.4: lazy project_id re-resolve (recover after startup-time CMS outage) --- #
+
+def test_check_project_id_lazy_reresolves_when_none(env, monkeypatch):
+    """If project_id was None (CMS DB down at Component init), _check_project_id
+    attempts ONE read-only re-resolve so the worker recovers without a
+    restart once the DB is back."""
+    from hubzeroplugin import api
+    store = api.HubzeroPermissionStore.__new__(api.HubzeroPermissionStore)
+    store.env = env
+    store.project = 'tooltest'
+    store.project_id = None
+    store.fail_closed = False
+    monkeypatch.setattr(api, '_resolve_project_id', lambda e, n: '99')
+    assert api._check_project_id(store) is True
+    assert store.project_id == '99'            # recovered + cached on the instance
+
+
+def test_check_project_id_lazy_reresolve_still_none_returns_false(env, monkeypatch):
+    """Re-resolve still fails (DB still down) + fail_closed off -> False
+    (degrade), project_id stays None."""
+    from hubzeroplugin import api
+    store = api.HubzeroPermissionStore.__new__(api.HubzeroPermissionStore)
+    store.env = env
+    store.project = 'tooltest'
+    store.project_id = None
+    store.fail_closed = False
+    monkeypatch.setattr(api, '_resolve_project_id', lambda e, n: None)
+    assert api._check_project_id(store) is False
+    assert store.project_id is None
+
+
+def test_check_project_id_lazy_reresolve_still_none_fail_closed_raises(env, monkeypatch):
+    """Re-resolve still fails + fail_closed on -> TracError (don't silently
+    serve an empty-permissions page)."""
+    from hubzeroplugin import api
+    store = api.HubzeroPermissionStore.__new__(api.HubzeroPermissionStore)
+    store.env = env
+    store.project = 'tooltest'
+    store.project_id = None
+    store.fail_closed = True
+    monkeypatch.setattr(api, '_resolve_project_id', lambda e, n: None)
+    with pytest.raises(api.TracError):
+        api._check_project_id(store)
+
+
+def test_check_project_id_no_reresolve_when_already_set(env, monkeypatch):
+    """project_id already resolved -> True immediately, NO re-resolve query."""
+    from hubzeroplugin import api
+    store = api.HubzeroPermissionStore.__new__(api.HubzeroPermissionStore)
+    store.env = env
+    store.project = 'tooltest'
+    store.project_id = '42'
+    store.fail_closed = False
+    called = []
+    monkeypatch.setattr(api, '_resolve_project_id',
+                        lambda e, n: called.append(1) or '99')
+    assert api._check_project_id(store) is True
+    assert store.project_id == '42'            # unchanged
+    assert called == []                        # no re-resolve attempted
