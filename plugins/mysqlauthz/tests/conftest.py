@@ -31,7 +31,8 @@ sys.path.insert(0, os.path.normpath(
 
 # --- Trac stubs (must run before any test imports hubzeroplugin.api) ---
 
-for _mod in ('trac', 'trac.core', 'trac.config', 'trac.perm'):
+for _mod in ('trac', 'trac.core', 'trac.config', 'trac.perm',
+             'trac.util', 'trac.util.html', 'trac.web', 'trac.web.chrome'):
     # str(_mod): on Py2 with `from __future__ import unicode_literals` the
     # literals above are `unicode`, but types.ModuleType() requires a native
     # str.  str() is a no-op on Py3 and a unicode->bytes coerce on Py2.
@@ -53,6 +54,31 @@ class _BoolOption(object):
 
 
 sys.modules['trac.config'].BoolOption = _BoolOption
+
+
+# trac.web.chrome.INavigationContributor: an interface in real Trac, we just
+# need it as a name to inherit from in `implements(...)`.
+sys.modules['trac.web.chrome'].INavigationContributor = object
+
+
+# trac.util.html.tag: a tag builder.  Real Trac returns a Genshi/Jinja element;
+# tests only need to be able to call `tag.span(...)` and inspect the result,
+# so model it as a callable namespace that returns a recorded tuple.
+class _FakeTagBuilder(object):
+    """`tag.span(text, class_=..., title=...)` -> a dict capturing the call.
+    Good enough for assertion-by-shape; doesn't try to mimic real Trac output."""
+    def __init__(self, name):
+        self.name = name
+    def __call__(self, *children, **attrs):
+        return {"tag": self.name, "children": list(children), "attrs": attrs}
+
+
+class _FakeTag(object):
+    def __getattr__(self, name):
+        return _FakeTagBuilder(name)
+
+
+sys.modules['trac.util.html'].tag = _FakeTag()
 
 
 import pytest   # noqa: E402  (must follow the trac stubs above)

@@ -34,6 +34,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import contextlib
 import re
+import time
 
 # Py3 stdlib or Py2 PyPI backport (declared in pyproject.toml).
 from configparser import RawConfigParser
@@ -48,6 +49,8 @@ from pymysql.err import ProgrammingError, OperationalError
 from trac.config import BoolOption
 from trac.core import *
 from trac.perm import IPermissionGroupProvider, IPermissionStore
+from trac.util.html import tag                # cross-version Trac tag builder
+from trac.web.chrome import INavigationContributor
 
 __all__ = ['IPermissionStore', 'IPermissionGroupProvider']
 
@@ -64,6 +67,15 @@ _FAIL_CLOSED_DOC = (
     "production envs).  Default false for backward compat; flip to true on "
     "envs where you'd rather see a 500 than a security-blurred page."
 )
+
+
+# Sticky DB-error timestamp window: how long after a DB exception the
+# Store's metanav warning stays visible.  Reset to 0 after a successful
+# query so the banner clears when the DB comes back.  Lives on the Store
+# instance (one per env -- Trac instantiates Components per Environment),
+# so envs that share a CMS DB but don't talk to it at the same moment
+# don't bleed banners across each other.
+_DB_ERROR_BANNER_WINDOW_SECONDS = 300
 
 
 def _check_project_id(component):
@@ -167,7 +179,7 @@ class HubzeroPermissionStore(Component):
     This component uses the group and user and trac permission tables in HUBzero
     to store permissions and groups.
     """
-    implements(IPermissionStore)
+    implements(IPermissionStore, INavigationContributor)
 
     group_providers = ExtensionPoint(IPermissionGroupProvider)
 
@@ -177,6 +189,11 @@ class HubzeroPermissionStore(Component):
         self.env.log.debug('HubzeroPermissionStore::__init__() start')
         self.project = self.env.config.get('project', 'name')
         self.project_id = None
+        # Sticky DB-error marker: set by _mark_db_error() on any exception
+        # in a method body; cleared by _mark_db_success() after a query
+        # completes cleanly.  get_navigation_items() reads it to decide
+        # whether to surface the [!] banner in the metanav.
+        self._last_db_error_at = 0
         try:
             with _cms_cursor(self.env) as (cursor, db):
                 cursor.execute('SELECT id FROM jos_trac_project WHERE name=%s', (self.project,))
@@ -189,9 +206,67 @@ class HubzeroPermissionStore(Component):
                     # row-fetched branch above (it was an int before -- which
                     # crashed the `'...' + self.project_id + '...'` log below).
                     self.project_id = str(db.insert_id())
+            self._mark_db_success()
         except Exception:
+            self._mark_db_error()
             self.env.log.exception('HubzeroPermissionStore::__init__() failed')
         self.env.log.debug('HubzeroPermissionStore::__init__(): project_id=%s end', self.project_id)
+
+    # -- DB-error sticky marker (review #8) --------------------------------- #
+
+    def _mark_db_error(self):
+        """Stamp the sticky DB-error marker so the next render of the
+        metanav surfaces the [!] banner.  Called from every method's
+        `except Exception:` block."""
+        self._last_db_error_at = time.time()
+
+    def _mark_db_success(self):
+        """Clear the sticky DB-error marker.  Called from every method
+        immediately after the `with _cms_cursor(...)` block completes
+        without exception -- so the banner clears as soon as the CMS DB
+        is reachable again."""
+        self._last_db_error_at = 0
+
+    # -- INavigationContributor (review #8) --------------------------------- #
+    # Surface a [!] banner in the metanav (top-right chrome slot, next to
+    # the user / login link) when this env's permission_store hit a CMS DB
+    # exception within the last _DB_ERROR_BANNER_WINDOW_SECONDS.  Without
+    # this, a CMS DB outage degrades silently: pages render, permissions
+    # are empty, admins look anonymous and have no visible signal that
+    # anything is wrong unless they happen to be reading trac.log.
+    #
+    # The banner is shown ONLY to logged-in users -- random anonymous
+    # visitors don't see "HUBzero DB unreachable" advertised in their
+    # chrome (it's internal infrastructure state).  An operator who's
+    # logged in (the audience for this signal) sees it.
+    #
+    # Cross-Trac-version compatible: INavigationContributor exists in
+    # both Trac 1.0/1.4 (Genshi templates) and 1.6 (Jinja2).  Stock
+    # `tag.span(...)` from trac.util.html builds correctly in both.
+
+    def get_active_navigation_item(self, req):
+        # We don't claim any active item -- the banner is a passive
+        # status display, not a navigation target.
+        return ""
+
+    def get_navigation_items(self, req):
+        if getattr(req, "authname", "anonymous") == "anonymous":
+            return
+        age = time.time() - self._last_db_error_at
+        if 0 < age < _DB_ERROR_BANNER_WINDOW_SECONDS:
+            yield (
+                "metanav",
+                "hubzero_db_status",
+                tag.span(
+                    " [!] HUBzero DB unreachable - permissions may be incomplete ",
+                    class_="hubzero-db-warning",
+                    title=("hubzero-trac-mysqlauthz hit a CMS DB exception "
+                           "within the last %d seconds; check the env's "
+                           "trac.log for details.  This warning auto-clears "
+                           "the next time the DB query succeeds."
+                           % _DB_ERROR_BANNER_WINDOW_SECONDS),
+                ),
+            )
 
     # No __del__ -- nothing to clean up.  Each method opens & closes its own
     # CMS connection via _cms_cursor(); there is no instance-held DB state.
@@ -240,7 +315,9 @@ class HubzeroPermissionStore(Component):
                                    (self.project_id,))
                     for action, in cursor.fetchall():
                         actions.add(action)
+            self._mark_db_success()
         except Exception:
+            self._mark_db_error()
             self.env.log.exception('HubzeroPermissionStore::get_user_permission(%r) failed', username)
             if self.fail_closed:
                 raise
@@ -282,7 +359,9 @@ class HubzeroPermissionStore(Component):
                 cursor.execute(sql_group, params)
                 for username, in cursor.fetchall():
                     result.add(username)
+            self._mark_db_success()
         except Exception:
+            self._mark_db_error()
             self.env.log.exception('HubzeroPermissionStore::get_users_with_permission(%r) failed', permissions)
             if self.fail_closed:
                 raise
@@ -333,7 +412,9 @@ class HubzeroPermissionStore(Component):
                                "WHERE p.group_id = '0' AND p.trac_project_id = %s",
                                (self.project_id,))
                 perms.extend((g, a) for g, a in cursor.fetchall())
+            self._mark_db_success()
         except Exception:
+            self._mark_db_error()
             self.env.log.exception('HubzeroPermissionStore::get_all_permissions() failed')
             if self.fail_closed:
                 raise
@@ -360,11 +441,27 @@ class HubzeroPermissionStore(Component):
                         row = cursor.fetchone()
                         if row:
                             gidNumber = str(row[0])
+                        else:
+                            # review #9: silent no-op was indistinguishable from
+                            # success.  Log a warning so `trac-admin permission
+                            # add @group X` doesn't quietly do nothing when the
+                            # group doesn't exist in jos_xgroups.
+                            self.env.log.warning(
+                                "HubzeroPermissionStore::grant_permission: "
+                                "group @%s not found in jos_xgroups; "
+                                "grant of %s is a no-op", username, action)
                     else:
                         cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
                         row = cursor.fetchone()
                         if row:
                             uidNumber = str(row[0])
+                        else:
+                            # review #9, same reason -- unknown username.
+                            self.env.log.warning(
+                                "HubzeroPermissionStore::grant_permission: "
+                                "user %r not found in jos_users; grant of %s "
+                                "is a no-op (check the CMS account exists "
+                                "and was synced)", username, action)
 
                     if uidNumber is not None:
                         cursor.execute('INSERT IGNORE INTO jos_trac_user_permission (user_id,action,trac_project_id) VALUE (%s,%s,%s);',
@@ -399,7 +496,9 @@ class HubzeroPermissionStore(Component):
                         # not None: cursor.execute(INSERT IGNORE INTO
                         # jos_xgroups_members ...)` -- dropped.
                         self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
+            self._mark_db_success()
         except Exception:
+            self._mark_db_error()
             self.env.log.exception('HubzeroPermissionStore::grant_permission(%r, %r) failed', username, action)
             if self.fail_closed:
                 raise
@@ -425,11 +524,23 @@ class HubzeroPermissionStore(Component):
                         row = cursor.fetchone()
                         if row:
                             gidNumber = str(row[0])
+                        else:
+                            # review #9: silent no-op was indistinguishable
+                            # from success.
+                            self.env.log.warning(
+                                "HubzeroPermissionStore::revoke_permission: "
+                                "group @%s not found in jos_xgroups; "
+                                "revoke of %s is a no-op", username, action)
                     else:
                         cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
                         row = cursor.fetchone()
                         if row:
                             uidNumber = str(row[0])
+                        else:
+                            self.env.log.warning(
+                                "HubzeroPermissionStore::revoke_permission: "
+                                "user %r not found in jos_users; revoke of %s "
+                                "is a no-op", username, action)
 
                     if uidNumber is not None:
                         cursor.execute('DELETE FROM jos_trac_user_permission '
@@ -464,7 +575,9 @@ class HubzeroPermissionStore(Component):
                         # None and uidNumber is not None:` block that would
                         # have DELETEd from jos_xgroups_members / _managers.
                         self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
+            self._mark_db_success()
         except Exception:
+            self._mark_db_error()
             self.env.log.exception('HubzeroPermissionStore::revoke_permission(%r, %r) failed', username, action)
             if self.fail_closed:
                 raise

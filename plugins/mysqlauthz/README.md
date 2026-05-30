@@ -12,13 +12,16 @@ install in the Python site-packages serves every Trac env on the host.
 
 ## Status
 
-This directory is the source of **`hubzero-trac-mysqlauthz` 2.4.2** — the
+This directory is the source of **`hubzero-trac-mysqlauthz` 2.4.3** — the
 hzforge release that supersedes upstream 2.2.5 with a dual-target Py2.7 +
 Py3.x wheel and a set of audit-driven fixes.  The version jump (2.2.5 → 2.4.0)
 signals real behavior change (parameterized SQL, connection-management
 rewrite, the long-broken `get_permission_groups` query), not a downstream
 patch level; 2.4.1 follows up with one regression fix (hzforge.6); 2.4.2
-adds the opt-in `[hubzero] fail_closed` operational knob (hzforge.7).
+adds the opt-in `[hubzero] fail_closed` operational knob (hzforge.7); 2.4.3
+adds a CMS-DB-down metanav banner (visible to logged-in users) plus
+`log.warning` calls in grant/revoke when the user/group can't be found
+in `jos_users`/`jos_xgroups` (hzforge.8).
 
 | Concern | Status |
 |---|---|
@@ -46,9 +49,10 @@ table.  All five iterations ship together as 2.4.0):
 | `hzforge.4` | Fix `get_permission_groups` — the query referenced an undefined `proj` alias in `WHERE`/`FROM` (broken since at least 2011).  Resolved by filtering on `self.project_id` directly (matches every other query in the plugin), with `DISTINCT` added to avoid duplicate `@group` entries and the unused `p.action` column dropped. |
 | `hzforge.5` | Add `tests/` — 17 pytest cases covering the context manager (close on normal+exception exit), `__init__` paths, `get_user_permissions`, `get_users_with_permissions` (parametrized over the IN-clause size), `grant`/`revoke`, `get_permission_groups`, plus regression tests locking in the parameterization (hzforge.2) and the `proj`-alias fix (hzforge.4).  Trac + the CMS DB are stubbed; no real Trac install or MySQL required. |
 | `hzforge.6` | Fix `HubzeroPermissionGroupProvider.__init__` — 2.4.0 referenced `self.project_id` in `get_permission_groups` but never set it (regression in hzforge.4).  The AttributeError was swallowed by Trac, so every authenticated user silently lost all `@group` memberships in production.  Extracted `_resolve_project_id(env, project_name)` for the read-only SELECT (the Store keeps the create-if-missing path) and call it from the Provider's `__init__`.  Added 4 regression tests including one that exercises the real `__init__` (the previous fixture set `project_id` manually, masking the bug).  Suite: 17 → 21 tests. |
-| `hzforge.7` | Add `[hubzero] fail_closed` BoolOption (default `false`).  When `true`, the Store and Provider raise `TracError` on a CMS DB exception (or an unresolved `project_id` at startup) instead of silently degrading to empty permissions.  Closes review item #8: silent degrade during a CMS DB outage hides TRAC_ADMIN from the actual admins (pages still render, admin functions vanish, the only signal is in `trac.log` which is often disabled).  Opt-in to preserve back-compat; flip per env to taste.  Suite: 21 → 28 tests. |
+| `hzforge.7` | Add `[hubzero] fail_closed` BoolOption (default `false`).  When `true`, the Store and Provider raise `TracError` on a CMS DB exception (or an unresolved `project_id` at startup) instead of silently degrading to empty permissions.  Closes review item #8 (hard-fail variant): silent degrade during a CMS DB outage hides TRAC_ADMIN from the actual admins (pages still render, admin functions vanish, the only signal is in `trac.log` which is often disabled).  Opt-in to preserve back-compat; flip per env to taste.  Suite: 21 → 28 tests. |
+| `hzforge.8` | Two operator-visibility additions.  (a) `HubzeroPermissionStore` now implements `INavigationContributor` and surfaces a `[!] HUBzero DB unreachable - permissions may be incomplete` banner in the metanav whenever any of its methods has hit a CMS DB exception in the last 5 minutes (configurable via `_DB_ERROR_BANNER_WINDOW_SECONDS`).  Banner is shown only to logged-in users (operators), not anonymous visitors.  Auto-clears as soon as the next DB query succeeds.  Complements `fail_closed`: hzforge.7 hard-fails the request when on, hzforge.8 softly notifies the operator regardless.  (b) `grant_permission` / `revoke_permission` now log a WARNING when the username isn't in `jos_users` or the group isn't in `jos_xgroups` -- previously the SELECT returned no row, the INSERT/DELETE was skipped, and `trac-admin permission add/remove` exited 0 even though nothing happened.  Closes review item #9.  Suite: 28 → 39 tests. |
 
-**All audit-table items are resolved.**  2.4.2 is the production release;
+**All audit-table items are resolved.**  2.4.3 is the production release;
 it installs cleanly on both Py2.7 (today's Trac 1.0.14 stack) and Py3.6+
 (in preparation for the Trac 1.6 / Py3 migration).
 
@@ -56,7 +60,7 @@ it installs cleanly on both Py2.7 (today's Trac 1.0.14 stack) and Py3.6+
 
 ```sh
 cd plugins/mysqlauthz
-make            # = make test = make test-py3  -> 28 tests, ~0.3s on Py3.6
+make            # = make test = make test-py3  -> 39 tests, ~0.4s on Py3.6
 make test-py2   # same suite on Py2.7 (the production Trac interpreter today)
 make test-all   # both
 ```

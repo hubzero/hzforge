@@ -366,3 +366,133 @@ def test_fail_closed_reraises_for_grant_and_revoke(fake_db, store, monkeypatch):
         store.grant_permission('alice', 'WIKI_VIEW')
     with pytest.raises(RuntimeError):
         store.revoke_permission('alice', 'WIKI_VIEW')
+
+
+# -----------------------------------------------------------------------------
+# INavigationContributor banner (review #8 telemetry): when a recent DB
+# exception was logged, expose a metanav warning to logged-in users so they
+# see the degraded state without having to read trac.log.
+# -----------------------------------------------------------------------------
+
+import time as _time
+
+class _FakeReq(object):
+    def __init__(self, authname="alice"):
+        self.authname = authname
+
+
+def test_navigation_item_absent_when_no_recent_db_error(store):
+    """Default state -- _last_db_error_at == 0 -- no banner."""
+    store._last_db_error_at = 0
+    assert list(store.get_navigation_items(_FakeReq())) == []
+
+
+def test_navigation_item_shown_when_recent_db_error(store):
+    """Recent DB error within the sticky window -> metanav banner."""
+    store._last_db_error_at = _time.time() - 5             # 5 seconds ago
+    items = list(store.get_navigation_items(_FakeReq()))
+    assert len(items) == 1
+    region, name, element = items[0]
+    assert region == "metanav"
+    assert name   == "hubzero_db_status"
+    # The element is our stubbed tag.span() dict; verify the text +
+    # CSS class are useful.
+    assert element["tag"] == "span"
+    assert "HUBzero DB unreachable" in element["children"][0]
+    assert element["attrs"]["class_"] == "hubzero-db-warning"
+
+
+def test_navigation_item_clears_after_sticky_window(store):
+    """Old error (> _DB_ERROR_BANNER_WINDOW_SECONDS) -> no banner."""
+    store._last_db_error_at = _time.time() - api._DB_ERROR_BANNER_WINDOW_SECONDS - 1
+    assert list(store.get_navigation_items(_FakeReq())) == []
+
+
+def test_navigation_item_hidden_for_anonymous(store):
+    """Anonymous visitors don't get told about internal infrastructure
+    state.  Banner is only for logged-in users (operators)."""
+    store._last_db_error_at = _time.time() - 5
+    assert list(store.get_navigation_items(_FakeReq(authname="anonymous"))) == []
+
+
+def test_mark_db_success_clears_the_banner(store):
+    """A successful query clears the sticky marker so the banner stops
+    showing on subsequent renders."""
+    store._last_db_error_at = _time.time() - 5
+    assert list(store.get_navigation_items(_FakeReq())) != []
+    store._mark_db_success()
+    assert list(store.get_navigation_items(_FakeReq())) == []
+
+
+def test_get_user_permissions_marks_db_success_on_clean_query(fake_db, store):
+    """Each public method should stamp _mark_db_success() at the end of a
+    successful try block, so a previous error gets cleared as soon as the
+    DB is reachable again."""
+    store._last_db_error_at = _time.time() - 5     # simulate a prior error
+    fake_db(staged_results=[[]])
+    store.get_user_permissions('anonymous')
+    assert store._last_db_error_at == 0            # cleared
+
+
+def test_get_user_permissions_marks_db_error_on_exception(fake_db, store, monkeypatch):
+    """And the converse: an exception during a method stamps the marker."""
+    store._last_db_error_at = 0                     # no prior error
+    monkeypatch.setattr(api, '_open_cms_connection',
+                        lambda _: (_ for _ in ()).throw(RuntimeError("CMS down")))
+    store.get_user_permissions('anonymous')         # swallowed (fail_closed=False)
+    assert store._last_db_error_at > 0              # marker stamped
+
+
+# -----------------------------------------------------------------------------
+# Review #9: grant_permission / revoke_permission must NOT be silent no-ops
+# when the user/group doesn't exist in jos_users/jos_xgroups.  Without a log
+# warning, `trac-admin <env> permission add bob TICKET_VIEW` returns success
+# even when `bob` doesn't exist -- operators think the perm landed when it
+# didn't.
+# -----------------------------------------------------------------------------
+
+def test_grant_permission_warns_on_unknown_user(fake_db, store):
+    """SELECT id FROM jos_users WHERE username=%s returns no row -> log a
+    warning identifying the user that wasn't found."""
+    fake_db(staged_results=[[]])                    # SELECT returns no row
+    store.get_user_permissions = lambda *a: None    # avoid the navigation banner check
+    store.env.log.records = []                      # reset
+    store.grant_permission('ghost', 'TICKET_VIEW')
+    warnings = [r for r in store.env.log.records if r[0] == 'warning']
+    assert warnings, "expected a log.warning when user not in jos_users"
+    msg = warnings[0][1][0]
+    assert "not found" in msg
+    assert "ghost" in str(warnings[0][1])
+
+
+def test_grant_permission_warns_on_unknown_group(fake_db, store):
+    """SELECT gidNumber FROM jos_xgroups WHERE cn=%s returns no row -> warn."""
+    fake_db(staged_results=[[]])
+    store.env.log.records = []
+    store.grant_permission('@nonexistent', 'TICKET_VIEW')
+    warnings = [r for r in store.env.log.records if r[0] == 'warning']
+    assert warnings, "expected a log.warning when group not in jos_xgroups"
+    msg = warnings[0][1][0]
+    assert "nonexistent" in str(warnings[0][1])
+
+
+def test_revoke_permission_warns_on_unknown_user(fake_db, store):
+    """Same contract for revoke -- silent no-op is just as misleading on
+    the way out."""
+    fake_db(staged_results=[[]])
+    store.env.log.records = []
+    store.revoke_permission('ghost', 'TICKET_VIEW')
+    warnings = [r for r in store.env.log.records if r[0] == 'warning']
+    assert warnings
+    assert "ghost" in str(warnings[0][1])
+
+
+def test_grant_permission_does_not_warn_on_known_user(fake_db, store):
+    """Sanity: a successful user lookup followed by the INSERT shouldn't
+    log a warning -- the new warnings must be precisely scoped to the
+    'no row found' branch."""
+    fake_db(staged_results=[[(42,)], []])           # SELECT user -> id 42, then INSERT
+    store.env.log.records = []
+    store.grant_permission('alice', 'TICKET_VIEW')
+    warnings = [r for r in store.env.log.records if r[0] == 'warning']
+    assert warnings == []
