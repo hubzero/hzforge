@@ -594,3 +594,173 @@ def test_py_can_import_defaults_to_chosen_python(monkeypatch):
     captured.clear()
     hz.py_can_import("trac", py="python2")
     assert captured[0] == ["python2", "-c", "import trac"]
+
+
+# --- svn-source matrix: default tied to --trac-handler + clean cutover --- #
+
+def test_install_defaults_svn_source_unset():
+    """INSTALL_DEFAULTS leaves svn_source as None so main() can resolve it
+    from --trac-handler (mod_python -> wandisco, mod_wsgi -> appstream).
+    Argparse default is also None, so explicit --svn-source still wins."""
+    assert hz.INSTALL_DEFAULTS["svn_source"] is None
+
+
+def test_argparse_does_not_set_svn_source_default():
+    """build_parser leaves --svn-source as None when not passed -- main()
+    is the single source of truth for the matrix-tied default."""
+    parser = hz.build_parser()
+    args = parser.parse_args(["install", "--trac-handler", "mod_python", "svn"])
+    assert args.svn_source is None
+    args = parser.parse_args(["install", "--trac-handler", "mod_wsgi", "svn"])
+    assert args.svn_source is None
+    args = parser.parse_args(["install", "--svn-source", "wandisco", "svn"])
+    assert args.svn_source == "wandisco"
+
+
+@pytest.mark.parametrize("dnf_output,expected", [
+    # AppStream module
+    ("Installed Packages\nsubversion.x86_64  1.10.2-5.module+el8.3.0+225+0e  @appstream\n",
+     "appstream"),
+    # wandisco
+    ("Installed Packages\nsubversion.x86_64  1.10.7-1.x86_64  @wandisco-svn110\n",
+     "wandisco"),
+    # System / preinstalled (no @repo or @System) -> "appstream" since the
+    # only thing that puts subversion in @System on this distro is the
+    # AppStream stream itself, classified as appstream
+    ("Installed Packages\nsubversion.x86_64  1.10.2-5  @System\n",
+     "appstream"),
+    # Unknown / locally built RPM
+    ("Installed Packages\nsubversion.x86_64  1.10.2-1.local  @local-repo\n",
+     "other"),
+])
+def test_svn_installed_source_classifies_correctly(monkeypatch, dnf_output, expected):
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: p == "subversion")
+    monkeypatch.setattr(hz, "_out", lambda cmd: dnf_output)
+    assert hz._svn_installed_source() == expected
+
+
+def test_svn_installed_source_returns_none_when_not_installed(monkeypatch):
+    """Fresh host -- subversion not installed yet."""
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: False)
+    assert hz._svn_installed_source() is None
+
+
+def test_switch_svn_source_appstream_to_wandisco_writes_repo(monkeypatch, tmp_path):
+    """Switch APPSTREAM -> WANDISCO: dnf-remove old packages, write the
+    wandisco repo file so subsequent dnf-install pulls from it.  Does NOT
+    touch the dnf module stream if no stream is enabled."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="wandisco"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "rpm_installed",
+                        lambda p: p in ("subversion", "mod_dav_svn"))
+    monkeypatch.setattr(hz, "_svn_module_stream", lambda: "1.10")
+    repo_writes = []
+    monkeypatch.setattr(hz, "ensure_wandisco_repo",
+                        lambda: repo_writes.append("wandisco-repo"))
+    cmds = []
+    monkeypatch.setattr(hz, "run", lambda cmd, **kw: cmds.append(list(cmd)))
+    hz._switch_svn_source("appstream", "wandisco")
+    # 1) dnf remove the old packages
+    assert any(c[:3] == ["dnf", "-y", "remove"] for c in cmds)
+    # 2) module reset (because a stream was enabled)
+    assert any(c[:4] == ["dnf", "-y", "module", "reset"] for c in cmds)
+    # 3) wandisco repo written
+    assert repo_writes == ["wandisco-repo"]
+
+
+def test_switch_svn_source_wandisco_to_appstream_removes_repo_file(monkeypatch, tmp_path):
+    """Switch WANDISCO -> APPSTREAM: dnf-remove old packages, delete the
+    wandisco repo file so it doesn't shadow AppStream's module stream."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    fake_repo = tmp_path / "wandisco-svn110.repo"
+    fake_repo.write_text("# wandisco repo\n")
+    monkeypatch.setattr(hz, "WANDISCO_REPO_PATH", str(fake_repo))
+    monkeypatch.setattr(hz, "rpm_installed",
+                        lambda p: p in ("subversion", "mod_dav_svn"))
+    monkeypatch.setattr(hz, "_svn_module_stream", lambda: None)   # no stream
+    cmds = []
+    monkeypatch.setattr(hz, "run", lambda cmd, **kw: cmds.append(list(cmd)))
+    hz._switch_svn_source("wandisco", "appstream")
+    # dnf remove ran
+    assert any(c[:3] == ["dnf", "-y", "remove"] for c in cmds)
+    # No module reset (no stream was enabled)
+    assert not any(c[:4] == ["dnf", "-y", "module", "reset"] for c in cmds)
+    # Wandisco repo file is gone
+    assert not fake_repo.exists()
+
+
+def test_switch_svn_source_wandisco_to_appstream_dry_run_keeps_repo(
+        monkeypatch, tmp_path, capsys):
+    """Under --dry-run, NO destructive actions occur: the wandisco repo
+    file stays on disk, but the log shows what WOULD happen."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(True), raising=False)
+    fake_repo = tmp_path / "wandisco-svn110.repo"
+    fake_repo.write_text("# wandisco repo\n")
+    monkeypatch.setattr(hz, "WANDISCO_REPO_PATH", str(fake_repo))
+    monkeypatch.setattr(hz, "rpm_installed",
+                        lambda p: p in ("subversion", "mod_dav_svn"))
+    monkeypatch.setattr(hz, "_svn_module_stream", lambda: None)
+    monkeypatch.setattr(hz, "run", lambda cmd, **kw:
+                        log_run(capsys, cmd, dry=hz.CTX.dry))
+    hz._switch_svn_source("wandisco", "appstream")
+    out = capsys.readouterr().out
+    assert "[dry-run] rm " in out                     # would-remove logged
+    assert fake_repo.exists()                          # but NOT removed
+
+
+def log_run(capsys, cmd, dry):
+    """Test helper -- mimics CTX-dry-aware run() (logs only, no exec)."""
+    pass
+
+
+def test_ensure_subversion_packages_skips_switch_when_already_target(monkeypatch):
+    """Current source matches target -- no switch, just install whatever's
+    missing (or no-op if all present)."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_SVN_PKGS_DONE", False, raising=False)
+    monkeypatch.setattr(hz, "_svn_installed_source", lambda: "appstream")
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: True)
+    switches = []
+    monkeypatch.setattr(hz, "_switch_svn_source",
+                        lambda fr, to: switches.append((fr, to)))
+    hz.ensure_subversion_packages()
+    assert switches == []                              # no switch triggered
+
+
+def test_ensure_subversion_packages_switches_on_mismatch(monkeypatch):
+    """Installed source != target -- switch + reinstall."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)   # CTX.dry == False
+    monkeypatch.setattr(hz, "_SVN_PKGS_DONE", False, raising=False)
+    monkeypatch.setattr(hz, "_svn_installed_source", lambda: "wandisco")
+    # After the switch removes the packages, rpm_installed returns False
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: False)
+    switches, installs = [], []
+    monkeypatch.setattr(hz, "_switch_svn_source",
+                        lambda fr, to: switches.append((fr, to)))
+    monkeypatch.setattr(hz, "_enable_svn_source", lambda: None)
+    monkeypatch.setattr(hz, "dnf_install",
+                        lambda pkgs, **kw: installs.append(list(pkgs)))
+    hz.ensure_subversion_packages()
+    assert switches == [("wandisco", "appstream")]
+    # And the reinstall pulls subversion + mod_dav_svn from the new source
+    assert any("subversion" in i for i in installs)
+
+
+def test_ensure_subversion_packages_does_not_switch_other_source(monkeypatch):
+    """If the installed subversion comes from an unclassified repo
+    (locally-built, third-party, ...), leave it alone -- a switch would
+    blow away the operator's intentional setup."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream"), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_SVN_PKGS_DONE", False, raising=False)
+    monkeypatch.setattr(hz, "_svn_installed_source", lambda: "other")
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: True)
+    switches = []
+    monkeypatch.setattr(hz, "_switch_svn_source",
+                        lambda fr, to: switches.append((fr, to)))
+    hz.ensure_subversion_packages()
+    assert switches == []
