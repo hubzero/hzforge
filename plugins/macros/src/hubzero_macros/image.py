@@ -41,6 +41,19 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 from trac.wiki.macros import WikiMacroBase
 
 
+def _escape(s):
+    """HTML-escape the 5 significant characters (`&` first).  See
+    hubzero_macros/link.py for the rationale: a Trac macro's returned
+    string is inserted as markup without further escaping, so every
+    wiki-author-controlled value must be escaped here or it's stored XSS.
+    Stdlib-free so it works identically on Py2.7 + Py3.6."""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&#39;"))
+
+
 class imageMacro(WikiMacroBase):
   """Inserts image."""
 
@@ -48,9 +61,16 @@ class imageMacro(WikiMacroBase):
   url = "http://hubzero.org"
 
   def expand_macro(self, formatter, name, args):
+    if not args:
+        return ''
     alist = args.split()
+    if not alist:
+        return ''
     link = alist[0]
-    rest = alist[1:]
     if not link.startswith('/'):
         link = '/' + link
-    return "<img src=\"%s/attachment/wiki/Images%s?format=raw\" />" % (self.env.abs_href(),link)
+    # src is always rooted at the trusted abs_href() base + a path we
+    # force to start with "/", so no scheme injection; HTML-escaping the
+    # assembled URL prevents attribute breakout from the image name.
+    src = _escape(self.env.abs_href() + "/attachment/wiki/Images" + link + "?format=raw")
+    return "<img src=\"%s\" />" % src

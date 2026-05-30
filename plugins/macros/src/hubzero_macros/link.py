@@ -42,6 +42,24 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 from trac.wiki.macros import WikiMacroBase
 
 
+def _escape(s):
+    """HTML-escape the 5 significant characters, in the correct order
+    (`&` first).  Identical to what stdlib `html.escape`/`markupsafe`
+    produce; safe in BOTH text and double/single-quoted attribute
+    contexts.  Used instead of Trac's `tag`/`Markup` so the macro is
+    provably safe AND testable without a Trac install (Py2.7 + Py3.6).
+
+    A Trac macro's returned string is inserted into the page as markup
+    WITHOUT further escaping -- so every wiki-author-controlled value
+    interpolated into the output must be escaped here, or it's stored
+    XSS."""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&#39;"))
+
+
 class linkMacro(WikiMacroBase):
   """Inserts internal project link."""
 
@@ -49,10 +67,19 @@ class linkMacro(WikiMacroBase):
   url = "http://hubzero.org"
 
   def expand_macro(self, formatter, name, args):
+    if not args:
+        return ''
     alist = args.split()
+    if not alist:
+        return ''
     link = alist[0]
     rest = alist[1:]
     if not link.startswith('/'):
         link = '/' + link
-    return "<a class=\"ext-link\" href=\"%s%s\">%s</a>" \
-      % (self.env.abs_href(),link," ".join(rest))
+    # href is always rooted at the trusted abs_href() base + a path that
+    # we force to start with "/", so no javascript:/scheme injection is
+    # possible; HTML-escaping then prevents attribute breakout.  The link
+    # text (wiki-author-controlled) is escaped for the text context.
+    href = _escape(self.env.abs_href() + link)
+    text = _escape(" ".join(rest))
+    return "<a class=\"ext-link\" href=\"%s\">%s</a>" % (href, text)

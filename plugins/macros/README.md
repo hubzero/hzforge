@@ -14,19 +14,35 @@ the `[trac.plugins]` entry-point discovery. No per-env file required.
 
 ## Status
 
-Dual-target Py2.7 + Py3.11.  The upstream macro sources were already
+Dual-target Py2.7 + Py3.6.  The upstream macro sources were already
 syntactically Py3-clean (`%`-format only, no `<>`/`iteritems`/`print`
 statement, no `ConfigParser`/`MySQLdb`), so the port is much smaller than
 `plugins/mysqlauthz/`'s — just `from __future__ import …` future imports
 for symmetry and dropping the dead `from trac.web.href import Href` (the
 `Href` was imported but never referenced).
 
+## Security
+
+**`0.1.1`** (2026-05-30) fixes a **stored XSS** carried over from the
+upstream macros (and present in `0.1.0`): both macros interpolated
+wiki-author-controlled input straight into HTML via raw `%`-formatting and
+returned a plain string, which Trac inserts as markup **without escaping**.
+Anyone with `WIKI_MODIFY` could plant a payload that runs in the browser of
+anyone (including admins) viewing the page — e.g.
+`[[link(/x <img src=x onerror=alert(document.cookie)>)]]`, or a `"`-breakout
+in the path/image-name. `0.1.1` HTML-escapes every interpolated value
+before returning and guards empty/`None` args (previously an
+`IndexError`/`AttributeError` traceback on `[[image]]`). The version label
+also drops the `+hzforge.1` local segment to match the sibling plugins'
+plain semver.
+
 Iteration log:
 
 | Iter | Concern |
 |---|---|
 | `hzforge.0` | Verbatim copy of upstream `hubzero-forge/source/{image.py.in,link.py.in}`.  The `.in` suffix is vestigial — these were templates back when they used `@PROJECT@`-style substitution, but the current upstream resolves URLs via `self.env.abs_href()` and needs no template processing. |
-| `hzforge.1` | Dual-target Py2.7 + Py3.11 — `from __future__ import …` future imports, drop the unused `Href` import.  Add 7 pytest cases covering both macros' basic / already-slashed / different-env / multi-word paths.  Trac is stubbed; no real Trac install required. |
+| `hzforge.1` | Dual-target Py2.7 + Py3.6 — `from __future__ import …` future imports, drop the unused `Href` import.  Add 7 pytest cases covering both macros' basic / already-slashed / different-env / multi-word paths.  Trac is stubbed; no real Trac install required. |
+| `0.1.1` | Stored-XSS fix — HTML-escape all interpolated values; guard empty/`None` args.  Add 7 XSS/edge-case tests (14 total). |
 
 ## Replaces
 
