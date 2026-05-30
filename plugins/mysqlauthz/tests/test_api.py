@@ -98,11 +98,19 @@ def test_get_user_permissions_authenticated_merges_all_four_sources(fake_db, sto
 
 
 def test_get_user_permissions_returns_empty_when_no_project_id(fake_db, store_factory):
-    fake_db(staged_results=[[('SHOULD_NOT_BE_FETCHED',)]])
+    """project_id None + the 2.4.4 lazy re-resolve ALSO finds no row -> stays
+    None, returns [].  (Pre-2.4.4 this opened no connection at all; now it
+    opens ONE for the re-resolve SELECT, which finds nothing.)"""
+    fake_db(staged_results=[[]])               # re-resolve SELECT returns no row
     store = store_factory(project_id=None)
+    store.fail_closed = False
     assert store.get_user_permissions('alice') == []
-    # The connection was never opened -- nothing called .execute()
-    assert fake_db.current() is None
+    # Exactly one query ran -- the jos_trac_project re-resolve lookup -- and
+    # it found nothing, so the permission read short-circuited.
+    calls = fake_db.current().cursor_obj.calls
+    assert len(calls) == 1
+    assert calls[0][0].startswith('SELECT id FROM jos_trac_project')
+    assert store.project_id is None            # not recovered
 
 
 # -----------------------------------------------------------------------------

@@ -93,7 +93,24 @@ def _check_project_id(component):
     Module-level instead of a method on the two Components so both can
     call it without a shared base class.  Py2's unbound-method check
     blocked the alternative `_check_project_id = Store._check_project_id`
-    aliasing pattern."""
+    aliasing pattern.
+
+    Lazy recovery: project_id is resolved once at Component __init__.  If
+    the CMS DB was down at that moment, project_id is None for the life of
+    the worker process -- silently stripping every authenticated user's
+    @group memberships even after the DB recovers (the availability bug
+    flagged in the 2026-05-30 review).  So when project_id is None we
+    attempt ONE read-only re-resolve here (the row was created by the
+    Store on an earlier successful request, or by another worker); on
+    success the Component recovers without a restart."""
+    if component.project_id is None:
+        recovered = _resolve_project_id(component.env, component.project)
+        if recovered is not None:
+            component.project_id = recovered
+            component.env.log.info(
+                "%s: recovered project_id=%s on lazy re-resolve "
+                "(CMS DB was likely down at Component init)",
+                type(component).__name__, recovered)
     if component.project_id is not None:
         return True
     if component.fail_closed:
