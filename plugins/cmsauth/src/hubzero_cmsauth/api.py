@@ -262,6 +262,43 @@ class HubzeroSSOLoginModule(LoginModule):
                         "treating request as anonymous", e)
             return None
 
+    @staticmethod
+    def _split_host_port(host_header, scheme):
+        """Split an HTTP Host header into (host, port) for the connect target.
+
+        Handles:
+          * "host"               -> (host, scheme-default port)
+          * "host:8443"          -> ("host", 8443)
+          * "[::1]"              -> ("::1", scheme-default port)   IPv6 literal
+          * "[2001:db8::1]:80"   -> ("2001:db8::1", 80)
+          * non-integer port     -> scheme-default port
+        Returns the bracket-STRIPPED host (the connect target); callers keep
+        the original header verbatim for the forwarded Host header.
+
+        The pre-1.0.6 code used a naive partition(":") that mangled bracketed
+        IPv6 literals -- "[::1]:8443" became host="[" -- so this is the fix."""
+        default = 443 if scheme == "https" else 80
+        if host_header.startswith("["):
+            # Bracketed IPv6 literal, optionally followed by :port.
+            end = host_header.find("]")
+            if end == -1:
+                return host_header, default        # malformed; best effort
+            host = host_header[1:end]
+            rest = host_header[end + 1:]
+            if rest.startswith(":"):
+                try:
+                    return host, int(rest[1:])
+                except ValueError:
+                    return host, default
+            return host, default
+        if ":" in host_header:
+            host, _, port_s = host_header.partition(":")
+            try:
+                return host, int(port_s)
+            except ValueError:
+                return host, default
+        return host_header, default
+
     def _call_api(self, req, cookie_header):
         """Open a one-shot HTTP(S) connection to the same scheme+host+port
         the browser used to reach Trac, forward the cookies, return the
