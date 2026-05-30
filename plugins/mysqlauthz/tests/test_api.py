@@ -284,3 +284,85 @@ def test_user_lookup_passes_value_as_parameter_not_concatenated(fake_db, store):
     assert '%s' in sel_sql
     # Value arrives as a parameter, where the driver will quote it safely:
     assert sel_params == (evil,)
+
+
+# -----------------------------------------------------------------------------
+# [hubzero] fail_closed (review #8): if true, raise TracError on a CMS DB
+# exception (or an unresolved project_id) instead of silently degrading to
+# empty permissions.  Default false preserves the existing degrade behavior.
+# -----------------------------------------------------------------------------
+
+def test_fail_closed_default_is_false():
+    """The knob defaults to False -- existing operators get the silent-
+    degrade behavior unless they explicitly opt in.  Locks in the
+    back-compat contract."""
+    assert api.HubzeroPermissionStore.fail_closed.default is False
+    assert api.HubzeroPermissionGroupProvider.fail_closed.default is False
+
+
+def test_fail_closed_raises_when_project_id_unresolved(fake_db, store_factory):
+    """fail_closed=True + project_id=None -> TracError (admin sees a 500
+    immediately, not a security-blurred empty-permissions page)."""
+    fake_db(staged_results=[])                            # no DB activity expected
+    store = store_factory(project_id=None)
+    store.fail_closed = True
+    with pytest.raises(api.TracError):
+        store.get_user_permissions('alice')
+
+
+def test_fail_closed_false_returns_empty_when_project_id_unresolved(fake_db, store_factory):
+    """fail_closed=False (default) + project_id=None -> empty list (the
+    silent-degrade behavior that triggered review #8 in the first place;
+    documented + preserved for back-compat)."""
+    fake_db(staged_results=[])
+    store = store_factory(project_id=None)
+    store.fail_closed = False
+    assert store.get_user_permissions('alice') == []
+
+
+def test_fail_closed_reraises_on_db_exception(fake_db, store, monkeypatch):
+    """fail_closed=True + DB exception mid-query -> the exception propagates
+    (vs being swallowed by the except block and returning a partial result)."""
+    def boom(_env):
+        raise RuntimeError("CMS DB unavailable")
+    monkeypatch.setattr(api, '_open_cms_connection', boom)
+    store.fail_closed = True
+    with pytest.raises(RuntimeError, match="CMS DB unavailable"):
+        store.get_user_permissions('alice')
+
+
+def test_fail_closed_false_swallows_db_exception(fake_db, store, monkeypatch):
+    """fail_closed=False + DB exception -> caught + logged + empty return
+    (the original behavior; we lock it in to prove the knob is opt-in)."""
+    def boom(_env):
+        raise RuntimeError("CMS DB unavailable")
+    monkeypatch.setattr(api, '_open_cms_connection', boom)
+    store.fail_closed = False
+    assert store.get_user_permissions('alice') == []
+    # The exception WAS logged (visible in env.log)
+    assert any(rec[0] == 'exception' for rec in store.env.log.records)
+
+
+def test_fail_closed_propagates_to_group_provider(fake_db, group_provider_factory):
+    """The Provider declares its own BoolOption with the same section/key,
+    so trac.ini's `[hubzero] fail_closed = true` flips both sides at once."""
+    fake_db(staged_results=[])
+    p = group_provider_factory(project_id=None)
+    p.fail_closed = True
+    with pytest.raises(api.TracError):
+        p.get_permission_groups('alice')
+
+
+def test_fail_closed_reraises_for_grant_and_revoke(fake_db, store, monkeypatch):
+    """Admin commands (`trac-admin permission add/remove`) should ALSO
+    fail loudly under fail_closed=True -- silently no-op'ing a grant when
+    the DB is down would leave the operator thinking they'd granted
+    something they hadn't."""
+    def boom(_env):
+        raise RuntimeError("CMS DB unavailable")
+    monkeypatch.setattr(api, '_open_cms_connection', boom)
+    store.fail_closed = True
+    with pytest.raises(RuntimeError):
+        store.grant_permission('alice', 'WIKI_VIEW')
+    with pytest.raises(RuntimeError):
+        store.revoke_permission('alice', 'WIKI_VIEW')

@@ -45,10 +45,51 @@ from configparser import RawConfigParser
 import pymysql as MySQLdb
 from pymysql.err import ProgrammingError, OperationalError
 
+from trac.config import BoolOption
 from trac.core import *
 from trac.perm import IPermissionGroupProvider, IPermissionStore
 
 __all__ = ['IPermissionStore', 'IPermissionGroupProvider']
+
+
+# `[hubzero] fail_closed` is a SHARED knob between Store + Provider (and any
+# future HUBzero component).  Both Components declare the same BoolOption so
+# either instance can read it; Trac de-dups them on the same section/key.
+_FAIL_CLOSED_DOC = (
+    "If true, raise TracError on a CMS DB exception (or on an unresolved "
+    "project_id at startup) instead of silently degrading to empty "
+    "permissions.  Silent degrade hides TRAC_ADMIN from the actual admins "
+    "during a CMS DB outage -- pages still render, but admin functions "
+    "vanish with no signal except in trac.log (which is often disabled on "
+    "production envs).  Default false for backward compat; flip to true on "
+    "envs where you'd rather see a 500 than a security-blurred page."
+)
+
+
+def _check_project_id(component):
+    """Helper used at the top of every public method on Store and Provider.
+
+    Returns True when the caller should continue (`project_id` is resolved).
+    Returns False when the caller should bail with its method-specific empty
+    return (`project_id is None` and `fail_closed = False` -- the silent-
+    degrade default).
+    Raises `TracError` when `project_id is None` and `fail_closed = True` --
+    in fail-closed mode, a startup DB outage (where `_resolve_project_id`
+    swallowed the exception and left project_id=None) should propagate to
+    the request, not silently render an empty-permissions page.
+
+    Module-level instead of a method on the two Components so both can
+    call it without a shared base class.  Py2's unbound-method check
+    blocked the alternative `_check_project_id = Store._check_project_id`
+    aliasing pattern."""
+    if component.project_id is not None:
+        return True
+    if component.fail_closed:
+        raise TracError(
+            "HUBzero project_id unresolved; CMS DB may be unreachable "
+            "(set [hubzero] fail_closed = false to degrade silently "
+            "instead of failing closed).")
+    return False
 
 HUBZERO_MODULE_CONFIG = [ 'enable', 'project', 'hzdb_host', 'hzdb_user', 'hzdb_password', 'hzdb_db' ]
 
@@ -122,13 +163,15 @@ def _cms_cursor(env):
 
 class HubzeroPermissionStore(Component):
     """HUBzero implementation of permission storage and limited group management.
-    
-    This component uses the group and user and trac permission tables in HUBzero 
+
+    This component uses the group and user and trac permission tables in HUBzero
     to store permissions and groups.
     """
     implements(IPermissionStore)
 
     group_providers = ExtensionPoint(IPermissionGroupProvider)
+
+    fail_closed = BoolOption("hubzero", "fail_closed", False, _FAIL_CLOSED_DOC)
 
     def __init__(self):
         self.env.log.debug('HubzeroPermissionStore::__init__() start')
@@ -163,7 +206,7 @@ class HubzeroPermissionStore(Component):
 
         self.env.log.debug('HubzeroPermissionStore::get_user_permission(%s) start', username)
         actions = set()
-        if self.project_id is None:
+        if not _check_project_id(self):
             return list(actions)
         try:
             with _cms_cursor(self.env) as (cursor, _db):
@@ -199,6 +242,8 @@ class HubzeroPermissionStore(Component):
                         actions.add(action)
         except Exception:
             self.env.log.exception('HubzeroPermissionStore::get_user_permission(%r) failed', username)
+            if self.fail_closed:
+                raise
         self.env.log.debug('HubzeroPermissionStore::get_user_permission(%s) end', username)
         return list(actions)
 
@@ -210,7 +255,7 @@ class HubzeroPermissionStore(Component):
       
         self.env.log.debug('HubzeroPermissionStore::get_users_with_permission() start')
         result = set()
-        if self.project_id is None:
+        if not _check_project_id(self):
             return list(result)
         # Dynamic IN-clause: one %s per permission, then the project_id
         # appended.  Passed as a single parameter tuple so the driver does
@@ -239,6 +284,8 @@ class HubzeroPermissionStore(Component):
                     result.add(username)
         except Exception:
             self.env.log.exception('HubzeroPermissionStore::get_users_with_permission(%r) failed', permissions)
+            if self.fail_closed:
+                raise
         self.env.log.debug('HubzeroPermissionStore::get_users_with_permission() end')
         return list(result)
 
@@ -250,7 +297,7 @@ class HubzeroPermissionStore(Component):
 
         self.env.log.debug('HubzeroPermissionStore::get_all_permissions() for project %s start', self.project)
         perms = []
-        if self.project_id is None:
+        if not _check_project_id(self):
             return perms
         try:
             with _cms_cursor(self.env) as (cursor, _db):
@@ -288,12 +335,16 @@ class HubzeroPermissionStore(Component):
                 perms.extend((g, a) for g, a in cursor.fetchall())
         except Exception:
             self.env.log.exception('HubzeroPermissionStore::get_all_permissions() failed')
+            if self.fail_closed:
+                raise
         self.env.log.debug('HubzeroPermissionStore::get_all_permissions() for project %s end', self.project)
         return perms
 
     def grant_permission(self, username, action):
         """Grants a user the permission to perform the specified action."""
         self.env.log.debug('HubzeroPermissionStore::grant_permission(%s, %s) start', username, action)
+        if not _check_project_id(self):
+            return
         try:
             with _cms_cursor(self.env) as (cursor, _db):
                 uidNumber = None
@@ -350,11 +401,15 @@ class HubzeroPermissionStore(Component):
                         self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
         except Exception:
             self.env.log.exception('HubzeroPermissionStore::grant_permission(%r, %r) failed', username, action)
+            if self.fail_closed:
+                raise
         self.env.log.debug('HubzeroPermissionStore::grant_permission() end')
 
     def revoke_permission(self, username, action):
         """Revokes a users' permission to perform the specified action."""
         self.env.log.debug('HubzeroPermissionStore::revoke_permission(%s, %s) start', username, action)
+        if not _check_project_id(self):
+            return
         try:
             with _cms_cursor(self.env) as (cursor, _db):
                 uidNumber = None
@@ -411,12 +466,16 @@ class HubzeroPermissionStore(Component):
                         self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
         except Exception:
             self.env.log.exception('HubzeroPermissionStore::revoke_permission(%r, %r) failed', username, action)
+            if self.fail_closed:
+                raise
         self.env.log.debug('HubzeroPermissionStore::revoke_permission() end')
 
 class HubzeroPermissionGroupProvider(Component):
     """Provides the basic builtin permission groups 'anonymous' and 'authenticated' and HUBzero groups."""
 
     implements(IPermissionGroupProvider)
+
+    fail_closed = BoolOption("hubzero", "fail_closed", False, _FAIL_CLOSED_DOC)
 
     def __init__(self):
         self.env.log.debug('HubzeroPermissionGroupProvider::__init__()')
@@ -442,7 +501,7 @@ class HubzeroPermissionGroupProvider(Component):
         if not (username and username != 'anonymous'):
             return groups
         groups.append('authenticated')
-        if self.project_id is None:
+        if not _check_project_id(self):
             return groups
         try:
             with _cms_cursor(self.env) as (cursor, _db):
@@ -465,5 +524,7 @@ class HubzeroPermissionGroupProvider(Component):
                     groups.append('@' + groupname)
         except Exception:
             self.env.log.exception('HubzeroPermissionGroupProvider::get_permission_groups(%r) failed', username)
+            if self.fail_closed:
+                raise
         self.env.log.debug('HubzeroPermissionGroupProvider::get_permission_groups(%s) end', username)
         return groups

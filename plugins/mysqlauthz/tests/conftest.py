@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.normpath(
 
 # --- Trac stubs (must run before any test imports hubzeroplugin.api) ---
 
-for _mod in ('trac', 'trac.core', 'trac.perm'):
+for _mod in ('trac', 'trac.core', 'trac.config', 'trac.perm'):
     # str(_mod): on Py2 with `from __future__ import unicode_literals` the
     # literals above are `unicode`, but types.ModuleType() requires a native
     # str.  str() is a no-op on Py3 and a unicode->bytes coerce on Py2.
@@ -39,8 +39,20 @@ for _mod in ('trac', 'trac.core', 'trac.perm'):
 sys.modules['trac.core'].Component       = type(str('Component'), (), {})
 sys.modules['trac.core'].ExtensionPoint  = lambda *a, **kw: None
 sys.modules['trac.core'].implements      = lambda *a, **kw: None
+sys.modules['trac.core'].TracError       = type(str('TracError'), (Exception,), {})
 sys.modules['trac.perm'].IPermissionStore         = object
 sys.modules['trac.perm'].IPermissionGroupProvider = object
+
+# trac.config.BoolOption descriptor: returns the default when accessed on an
+# instance (the test fixtures may override per-instance by assigning a value).
+class _BoolOption(object):
+    def __init__(self, section, key, default, doc=""):
+        self.section, self.key, self.default, self.doc = section, key, default, doc
+    def __get__(self, instance, owner=None):
+        return self if instance is None else self.default
+
+
+sys.modules['trac.config'].BoolOption = _BoolOption
 
 
 import pytest   # noqa: E402  (must follow the trac stubs above)
