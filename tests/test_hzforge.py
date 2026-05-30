@@ -1024,3 +1024,73 @@ def test_ensure_subversion_leaves_other_source_alone(monkeypatch):
                         lambda *a, **k: switches.append(a))
     hz.ensure_subversion_packages()
     assert switches == []
+
+
+# --- _pip_pkg_closure: never resolve a "Files:" entry to the site-packages
+#     root (a chmod -R a+rX on that would recurse the whole tree) --- #
+
+def test_pip_pkg_closure_skips_root_resolving_entries(monkeypatch):
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py27"), raising=False)
+    pip_show = (
+        "Name: Trac\n"
+        "Version: 1.0.14\n"
+        "Location: /usr/lib/python2.7/site-packages\n"
+        "Requires: \n"
+        "Files:\n"
+        "  trac/web/main.py\n"        # normal -> .../site-packages/trac
+        "  /etc/passwd\n"             # absolute -> empty first component (skip)
+        "  ./evil\n"                  # "." first component (skip)
+        "  ../escape\n"              # starts with ".." (already skipped)
+        "  Trac-1.0.14.dist-info/METADATA\n"   # normal -> .../Trac-1.0.14.dist-info
+    )
+    monkeypatch.setattr(hz, "run",
+                        lambda cmd, **kw: pip_show if cmd[1] == "show" else "")
+    paths = hz._pip_pkg_closure(["Trac"])
+    loc = "/usr/lib/python2.7/site-packages"
+    assert loc + "/trac" in paths
+    assert loc + "/Trac-1.0.14.dist-info" in paths
+    # The site-packages root itself must NEVER be a target
+    assert loc not in paths
+    assert all(os.path.normpath(p) != os.path.normpath(loc) for p in paths)
+    # No path escaped above loc
+    assert all(p.startswith(loc + "/") for p in paths)
+
+
+# --- enable-cmsauth: reject env names unsafe for the LDAP carve-out regex --- #
+
+def test_enable_cmsauth_rejects_regex_unsafe_env_name(tmp_path, monkeypatch):
+    """An env dir named with a regex metachar (e.g. 'foo.bar') would produce
+    a wrong Apache <LocationMatch> negative-lookahead; enable-cmsauth must
+    die rather than emit a subtly-broken auth carve-out."""
+    tools = tmp_path / "tools"
+    env_dir = tools / "foo.bar" / "conf"
+    env_dir.mkdir(parents=True)
+    (env_dir / "trac.ini").write_text("[components]\n")
+    monkeypatch.setattr(hz, "OPT", dict(hz.OPT, trac_tools=(str(tools), 0o750)),
+                        raising=False)
+    monkeypatch.setattr(hz, "ARGS", make_args(envs=["foo.bar"]), raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    with pytest.raises(SystemExit):
+        hz.cmd_enable_cmsauth()
+
+
+def test_enable_cmsauth_accepts_normal_env_name(tmp_path, monkeypatch):
+    """A conventional env name ([A-Za-z0-9_-]) passes the regex-safety gate.
+    Downstream steps are no-op'd so we don't touch the system; the point is
+    only that the name gate does NOT reject it (no SystemExit)."""
+    tools = tmp_path / "tools"
+    env_dir = tools / "bio3d_test-1" / "conf"
+    env_dir.mkdir(parents=True)
+    (env_dir / "trac.ini").write_text("[components]\n")
+    monkeypatch.setattr(hz, "OPT", dict(hz.OPT, trac_tools=(str(tools), 0o750)),
+                        raising=False)
+    monkeypatch.setattr(hz, "ARGS",
+                        make_args(envs=["bio3d_test-1"], install_wheel=None),
+                        raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_ok", lambda cmd: True)
+    monkeypatch.setattr(hz, "_ensure_components_enabled", lambda *a, **k: False)
+    monkeypatch.setattr(hz, "_ldap_carveout_ensure", lambda *a, **k: False)
+    monkeypatch.setattr(hz, "apply_changes", lambda *a, **k: None)
+    monkeypatch.setattr(hz, "dropin_path", lambda svc: str(tmp_path / "x.conf"))
+    hz.cmd_enable_cmsauth()    # should run to completion, no SystemExit

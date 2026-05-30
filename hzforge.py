@@ -1127,9 +1127,19 @@ def _pip_pkg_closure(roots):
                 in_files = True
             elif in_files and line[:1] in (" ", "\t"):
                 f = line.strip()
-                if f and not f.startswith(".."):
-                    if loc:
-                        paths.add(os.path.join(loc, f.split("/", 1)[0]))
+                if f and not f.startswith("..") and loc:
+                    top = f.split("/", 1)[0]
+                    # Guard against a "Files:" entry whose first component is
+                    # empty / "." / ".." : os.path.join(loc, "") == loc, so a
+                    # later `chmod -R a+rX` would recurse the ENTIRE
+                    # site-packages root (and rpm-owned files in it).  Skip
+                    # anything that doesn't resolve to a real child of loc.
+                    if top in ("", ".", ".."):
+                        continue
+                    full = os.path.join(loc, top)
+                    if os.path.normpath(full) == os.path.normpath(loc):
+                        continue                      # belt: never the root itself
+                    paths.add(full)
     return paths
 
 
@@ -1965,6 +1975,17 @@ def cmd_enable_cmsauth():
     if bad:
         die(f"unknown env(s): {', '.join(bad)}  "
             f"(have: {', '.join(all_envs) or '(none)'})")
+    # Env names go verbatim into the Apache LDAP <LocationMatch> negative-
+    # lookahead (e.g. `(?!hzforgetest/)`).  A name with a regex metachar
+    # (`.`, `+`, `(`, ...) would silently produce a WRONG lookahead -- e.g.
+    # `foo.bar` also matches `fooXbar` -- and would break the round-trip
+    # re-parse in `_ldap_carveout_ensure`.  Trac env dir names are
+    # conventionally `[A-Za-z0-9_-]+`; reject anything else rather than emit
+    # a subtly-broken auth carve-out.
+    unsafe = [e for e in requested if not re.match(r'^[\w-]+$', e)]
+    if unsafe:
+        die("env name(s) unsafe for the LDAP carve-out regex "
+            f"(only letters/digits/_/- allowed): {', '.join(unsafe)}")
 
     # 1. Optional wheel install.  Always before the import check, since the
     #    point is to make the import work.
