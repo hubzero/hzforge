@@ -28,6 +28,7 @@ def make_args(**kw):
     a = types.SimpleNamespace(
         include_dir="/etc/httpd/help.conf.d",
         trac_handler="mod_wsgi",
+        python="py27",                          # default matrix: py27
         ldap_url=None, ldap_binddn=None, ldap_bindpw=None, ldap_bindpw_file=None,
         services=[],
     )
@@ -483,3 +484,113 @@ def test_upgrade_trac_env_universal_missing_does_not_touch_trac_ini(tmp_path, mo
     hz._upgrade_trac_env(str(env))
     assert (env / "plugins" / "image.py").is_file()              # not disabled
     assert (env / "conf" / "trac.ini").read_text() == original_ini  # untouched
+
+
+# --- python/handler matrix (PY dict + _py/_pip/_modwsgi_conf_path helpers) ---
+
+def test_py_dict_has_three_valid_matrices():
+    """Three valid (python, handler) combos:
+    py27+mod_python (legacy), py27+mod_wsgi (current), py36+mod_wsgi (stage 2).
+    The 4th (py36+mod_python) is rejected at argparse time, not in PY."""
+    assert set(hz.PY.keys()) == {"py27", "py36"}
+    # py27: pip-install mod_wsgi (last Py2-capable: 4.9.4)
+    assert hz.PY["py27"]["py"]  == "python2"
+    assert hz.PY["py27"]["pip"] == "pip2"
+    assert hz.PY["py27"]["trac_spec"]      == "Trac==1.0.14"
+    assert hz.PY["py27"]["modwsgi_source"] == "pip"
+    assert hz.PY["py27"]["modwsgi_pip_spec"].startswith("mod_wsgi==")
+    assert hz.PY["py27"]["modwsgi_rpm"]    is None
+    # py36: dnf install python3-mod_wsgi (Rocky 8 AppStream; ships its own conf)
+    assert hz.PY["py36"]["py"]  == "python3"
+    assert hz.PY["py36"]["pip"] == "pip3"
+    assert hz.PY["py36"]["trac_spec"]      == "Trac>=1.6,<1.7"
+    assert hz.PY["py36"]["modwsgi_source"] == "rpm"
+    assert hz.PY["py36"]["modwsgi_pip_spec"] is None
+    assert hz.PY["py36"]["modwsgi_rpm"]    == "python3-mod_wsgi"
+    # py27's mod_wsgi RPM conf is OUR file; py36's is the AppStream RPM's file.
+    assert hz.PY["py27"]["modwsgi_conf"].endswith("/10-wsgi.conf")
+    assert hz.PY["py36"]["modwsgi_conf"].endswith("/10-wsgi-python3.conf")
+    # py27 needs the C toolchain to build mod_wsgi from source; py36 doesn't.
+    assert "python2-devel" in hz.PY["py27"]["build_deps"]
+    assert hz.PY["py36"]["build_deps"] == []
+
+
+def test_py_helper_returns_correct_interpreter(monkeypatch):
+    """_py() reads ARGS.python and returns the right binary name."""
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py27"), raising=False)
+    assert hz._py() == "python2"
+    assert hz._pip() == "pip2"
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py36"), raising=False)
+    assert hz._py() == "python3"
+    assert hz._pip() == "pip3"
+
+
+def test_modwsgi_conf_path_is_per_python(monkeypatch):
+    """py27 -> hzforge-written 10-wsgi.conf.  py36 -> AppStream RPM's
+    10-wsgi-python3.conf (we read from it but never write to it)."""
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py27"), raising=False)
+    assert hz._modwsgi_conf_path().endswith("/10-wsgi.conf")
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py36"), raising=False)
+    assert hz._modwsgi_conf_path().endswith("/10-wsgi-python3.conf")
+
+
+def test_install_defaults_trac_spec_unset(monkeypatch):
+    """INSTALL_DEFAULTS deliberately stores trac_spec/modwsgi_spec as None so
+    main() can resolve them from PY[args.python] AFTER parsing.  This locks in
+    the contract: argparse default is None, not a hardcoded value."""
+    assert hz.INSTALL_DEFAULTS["trac_spec"]    is None
+    assert hz.INSTALL_DEFAULTS["modwsgi_spec"] is None
+    assert hz.INSTALL_DEFAULTS["python"]       == "py27"   # back-compat default
+
+
+def test_argparse_resolves_trac_spec_from_python_choice():
+    """End-to-end via build_parser(): when --trac-spec isn't passed,
+    main()'s post-parse resolution would pick the python-appropriate
+    default from PY.  Verify the argparse layer leaves trac_spec=None for
+    main() to fill in."""
+    parser = hz.build_parser()
+    # --python py27 (no explicit trac-spec)
+    args = parser.parse_args(["install", "--python", "py27", "trac"])
+    assert args.python == "py27"
+    assert args.trac_spec    is None
+    assert args.modwsgi_spec is None
+    # --python py36
+    args = parser.parse_args(["install", "--python", "py36", "trac"])
+    assert args.python == "py36"
+    assert args.trac_spec    is None
+    # --trac-spec explicit always wins
+    args = parser.parse_args(["install", "--python", "py36",
+                              "--trac-spec", "Trac==1.4.4", "trac"])
+    assert args.trac_spec == "Trac==1.4.4"
+
+
+def test_pip_install_uses_chosen_pip(monkeypatch):
+    """pip_install() shells out to ARGS.pip (pip2 for py27, pip3 for py36)."""
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py27"), raising=False)
+    captured = []
+    monkeypatch.setattr(hz, "run", lambda cmd, **kw: captured.append(list(cmd)))
+    hz.pip_install("Trac==1.0.14")
+    # The shell command is ["sh", "-c", "<script>", "sh", pip, spec]
+    assert captured[0][:3] == ["sh", "-c", 'umask 022; exec "$1" install "$2"']
+    assert captured[0][4] == "pip2"
+    assert captured[0][5] == "Trac==1.0.14"
+    # Switch to py36 and re-check
+    captured.clear()
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py36"), raising=False)
+    hz.pip_install("Trac>=1.6,<1.7")
+    assert captured[0][4] == "pip3"
+    assert captured[0][5] == "Trac>=1.6,<1.7"
+
+
+def test_py_can_import_defaults_to_chosen_python(monkeypatch):
+    """py_can_import(mod) uses _py() unless explicitly overridden -- so
+    `import trac` is probed via python3 under --python=py36."""
+    monkeypatch.setattr(hz, "ARGS", make_args(python="py36"), raising=False)
+    captured = []
+    monkeypatch.setattr(hz, "_ok", lambda cmd: captured.append(list(cmd)) or True)
+    hz.py_can_import("trac")
+    assert captured[0] == ["python3", "-c", "import trac"]
+    # Explicit override still works (used by cmd_test which probes both):
+    captured.clear()
+    hz.py_can_import("trac", py="python2")
+    assert captured[0] == ["python2", "-c", "import trac"]

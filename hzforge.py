@@ -51,19 +51,76 @@ import tempfile
 # ---------------------------------------------------------------------------- #
 # Defaults
 # ---------------------------------------------------------------------------- #
-TRAC_SPEC     = "Trac==1.0.14"       # pinned; 1.0.x is DB schema 26 (matches envs, no upgrade)
-MODWSGI_SPEC  = "mod_wsgi==4.9.4"    # last Python-2-capable mod_wsgi release
 ALL_SERVICES  = ["svn", "git", "gitExternal", "trac"]
+
+# Per-Python-version install matrix.  Three valid combinations:
+#   (py27, mod_python, Trac 1.0.x)   -- legacy in-process handler
+#   (py27, mod_wsgi,   Trac 1.0.x)   -- the current help-host config
+#   (py36, mod_wsgi,   Trac 1.6.x)   -- Stage 2 target
+# (py36 + mod_python is REJECTED in main(): mod_python upstream is Py2-only.)
+#
+# Per-version differences captured here:
+#   py:                interpreter binary name (`python2` vs `python3`)
+#   pip:               pip binary name (`pip2` vs `pip3`)
+#   trac_spec:         pip-install spec (1.0.14 pinned for py27; 1.6.x range for
+#                      py36 -- 1.6 is the first Py3-only release with active
+#                      upstream).  Overridable via --trac-spec.
+#   modwsgi_source:    "pip" -> pip install + we write our own LoadModule conf
+#                      "rpm" -> `dnf install python3-mod_wsgi` (Rocky 8 AppStream
+#                      4.6.4-5.el8); the RPM ships its own conf.modules.d file
+#                      with the LoadModule wrapped in `<IfModule !wsgi_module>`
+#                      so it self-defers.
+#   modwsgi_pip_spec:  used only if modwsgi_source == "pip".  Overridable via
+#                      --modwsgi-spec.
+#   modwsgi_rpm:       used only if modwsgi_source == "rpm".
+#   modwsgi_conf:      where the LoadModule conf for THIS mod_wsgi lives.  For
+#                      "pip" we write it; for "rpm" the RPM owns it.
+#   build_deps:        RPM build deps needed to pip-install mod_wsgi (compiler
+#                      + Python + Apache headers).  Empty for rpm-installed
+#                      mod_wsgi.
+PY = {
+    "py27": {
+        "py":               "python2",
+        "pip":              "pip2",
+        "trac_spec":        "Trac==1.0.14",
+        "modwsgi_source":   "pip",
+        "modwsgi_pip_spec": "mod_wsgi==4.9.4",
+        "modwsgi_rpm":      None,
+        "modwsgi_conf":     "/etc/httpd/conf.modules.d/10-wsgi.conf",
+        "build_deps":       ["gcc", "python2-devel", "httpd-devel"],
+    },
+    "py36": {
+        "py":               "python3",
+        "pip":              "pip3",
+        "trac_spec":        "Trac>=1.6,<1.7",
+        "modwsgi_source":   "rpm",
+        "modwsgi_pip_spec": None,
+        "modwsgi_rpm":      "python3-mod_wsgi",
+        # Owned by the python3-mod_wsgi RPM; hzforge does not write or delete it.
+        "modwsgi_conf":     "/etc/httpd/conf.modules.d/10-wsgi-python3.conf",
+        "build_deps":       [],
+    },
+}
+
+# Back-compat aliases (kept for code that still references the old constants).
+TRAC_SPEC     = PY["py27"]["trac_spec"]
+MODWSGI_SPEC  = PY["py27"]["modwsgi_pip_spec"]
 
 # Options that live only on the `install` subparser, with their defaults.
 # Single source of truth: build_parser() wires these defaults into the install
 # args, and main() backfills the same attrs onto the other subcommands
 # (uninstall/doctor/repair/test read them too).
+#
+# `trac_spec` / `modwsgi_spec` default to None here so main() can resolve them
+# from PY[args.python] AFTER argparsing (an explicit --trac-spec / --modwsgi-spec
+# on the command line wins, otherwise the python-version-appropriate default
+# from PY[python] takes over).
 INSTALL_DEFAULTS = {
+    "python":           "py27",
     "trac_handler":     "mod_wsgi",
     "svn_source":       "wandisco",
-    "trac_spec":        TRAC_SPEC,
-    "modwsgi_spec":     MODWSGI_SPEC,
+    "trac_spec":        None,
+    "modwsgi_spec":     None,
     "ldap_url":         None,
     "ldap_binddn":      None,
     "ldap_bindpw":      None,
@@ -71,6 +128,25 @@ INSTALL_DEFAULTS = {
     "force_pip":        False,
     "no_test":          False,
 }
+
+
+def _py():
+    """Python binary name for the chosen --python (e.g. 'python2' or 'python3')."""
+    return PY[ARGS.python]["py"]
+
+
+def _pip():
+    """pip binary name for the chosen --python (e.g. 'pip2' or 'pip3')."""
+    return PY[ARGS.python]["pip"]
+
+
+def _modwsgi_conf_path():
+    """Path of the Apache LoadModule conf file for the chosen mod_wsgi.
+
+    py27: hzforge writes /etc/httpd/conf.modules.d/10-wsgi.conf.
+    py36: the python3-mod_wsgi RPM owns /etc/httpd/conf.modules.d/10-wsgi-python3.conf.
+    Either way, this is where Apache picks up the LoadModule line."""
+    return PY[ARGS.python]["modwsgi_conf"]
 
 OPT = {
     "trac":        ("/opt/trac",          0o755),
@@ -87,7 +163,10 @@ TOOLS_DIR    = OPT["trac_tools"][0]   # /opt/trac/tools
 WSGI_DIR     = "/opt/trac/wsgi"
 SHIM_PATH    = os.path.join(WSGI_DIR, "hubtrac.wsgi")
 EGG_CACHE    = "/opt/trac/.egg-cache"
-MODCONF_WSGI = "/etc/httpd/conf.modules.d/10-wsgi.conf"
+# MODCONF_WSGI is now per-python-version; resolve via _modwsgi_conf_path().
+# Kept as a back-compat alias for any external callers and the disabled-rename
+# path (still 10-wsgi.conf for py27, the only python that wrote one).
+MODCONF_WSGI = PY["py27"]["modwsgi_conf"]
 MODCONF_PY   = "/etc/httpd/conf.modules.d/10-python.conf"
 DROPIN_PREFIX = "00-forge-"   # one file per service: 00-forge-svn.conf, 00-forge-trac.conf, ...
 WANDISCO_REPO_PATH = "/etc/yum.repos.d/wandisco-svn110.repo"
@@ -206,7 +285,20 @@ def group_exists(g):
     return _ok(["getent", "group", g])
 
 
+def py_can_import(mod, py=None):
+    """True iff `import <mod>` succeeds under the given (or configured) python.
+
+    Defaults to whichever python the current command resolved (via _py()) --
+    `python2` for --python=py27, `python3` for --python=py36.  Pass an explicit
+    `py=` to probe one regardless of the current --python (used by fix_pip_perms
+    which must probe the running daemon's python, and by `cmd_test` which
+    checks both interpreters)."""
+    return _ok([py or _py(), "-c", f"import {mod}"])
+
+
 def py2_can_import(mod):
+    """Back-compat alias for code paths that always meant python2 specifically
+    (e.g. the legacy mod_python check, which is Py2-only)."""
     return _ok(["python2", "-c", f"import {mod}"])
 
 
@@ -306,10 +398,11 @@ def dnf_install(pkgs, enablerepo=None):
 def pip_install(spec):
     """Always run pip behind `umask 022` so the files root installs stay
     world-readable -- apache must be able to import them (root's default umask
-    0077 would make them unreadable, breaking Trac under mod_wsgi). The spec is
-    passed as a shell argument ($1), never interpolated into the command string,
-    so it can't break out and inject commands."""
-    run(["sh", "-c", 'umask 022; exec pip2 install "$1"', "sh", spec])
+    0077 would make them unreadable, breaking Trac under mod_wsgi).  Uses the
+    pip that goes with --python (`pip2` for py27, `pip3` for py36).  The spec
+    is passed as a shell argument ($2), never interpolated into the command
+    string, so it can't break out and inject commands."""
+    run(["sh", "-c", 'umask 022; exec "$1" install "$2"', "sh", _pip(), spec])
 
 
 def pip_install_plugin_wheel(wheel_path, interpreters=("pip2", "pip3")):
@@ -449,18 +542,19 @@ def setup_gitexternal():
 
 
 def setup_trac():
-    step(f"Trac -- packages, dirs, handler ({ARGS.trac_handler})")
+    step(f"Trac -- packages, dirs, handler ({ARGS.trac_handler}, {ARGS.python})")
     # We deliberately do NOT install the `hubzero-trac` metapackage: its only
     # meaningful runtime payload is hubzero-trac-mysqlauthz (the auth plugin),
     # and its %post pip-installs Trac==1.0.13 + subvertpy -- both of which we
-    # don't want.  We pin Trac via TRAC_SPEC (doctor/repair enforce the pin)
-    # and use the svn.core SWIG bindings from `subversion-python` (installed
-    # by the svn SERVICE) instead of subvertpy.  Pull just the runtime + build
-    # deps we actually need.
+    # don't want.  Pull just the runtime + build deps we actually need.
     needed = ["hubzero-trac-mysqlauthz"]               # from the hubzero repo
     if ARGS.trac_handler == "mod_wsgi":
-        # pip-built mod_wsgi 4.9.4 needs a C toolchain + Apache + Py2 headers.
-        needed += ["gcc", "python2-devel", "httpd-devel"]   # AppStream
+        # py27+mod_wsgi: pip-built mod_wsgi 4.9.4 needs a C toolchain + Apache +
+        # Py2 headers.  py36+mod_wsgi: nothing to build (python3-mod_wsgi RPM
+        # ships the .so).
+        needed += PY[ARGS.python]["build_deps"]
+        if PY[ARGS.python]["modwsgi_source"] == "rpm":
+            needed.append(PY[ARGS.python]["modwsgi_rpm"])    # python3-mod_wsgi
     to_install = [p for p in needed if not rpm_installed(p)]
     if to_install:
         dnf_install(to_install)
@@ -482,18 +576,19 @@ def _trac_spec_exact_version():
 
 
 def _trac_installed_version():
-    """pip2's view of the installed Trac dist version, or None if pip2/Trac absent.
-    Note: this is the pip dist version, which is what `Trac==X.Y.Z` pins -- the
-    quirky `trac.__version__` (frozen at 1.0.13 across 1.0.x dists) is not used."""
-    m = re.search(r"^Version:\s*(\S+)", _out(["pip2", "show", "Trac"]), re.M)
+    """The chosen pip's view of the installed Trac dist version, or None if
+    pip / Trac absent.  This is the pip dist version, which is what
+    `Trac==X.Y.Z` pins -- the quirky `trac.__version__` (frozen at 1.0.13
+    across 1.0.x dists) is not used."""
+    m = re.search(r"^Version:\s*(\S+)", _out([_pip(), "show", "Trac"]), re.M)
     return m.group(1) if m else None
 
 
 def _ensure_trac_installed():
     """pip-install Trac unless it already imports at the pinned version
-    (or --force-pip is set). When --trac-spec is an exact pin and the
+    (or --force-pip is set).  When --trac-spec is an exact pin and the
     installed dist differs, reinstall so doctor/repair/install converge."""
-    if not ARGS.force_pip and py2_can_import("trac"):
+    if not ARGS.force_pip and py_can_import("trac"):
         want = _trac_spec_exact_version()
         if not want:
             log("Trac importable (skip pip; --force-pip to reinstall)")
@@ -508,10 +603,19 @@ def _ensure_trac_installed():
 
 def _trac_modwsgi():
     _ensure_trac_installed()
-    if not os.path.exists(_modwsgi_so()) and not py2_can_import("mod_wsgi"):
-        pip_install(ARGS.modwsgi_spec)
+    src = PY[ARGS.python]["modwsgi_source"]
+    if src == "pip":
+        # py27: pip-install mod_wsgi (4.9.4 last Py2-capable).  Check
+        # filesystem .so first (mod_wsgi-express won't be on PATH on a fresh
+        # host).
+        if not os.path.exists(_modwsgi_so()) and not py_can_import("mod_wsgi"):
+            pip_install(ARGS.modwsgi_spec)
+        else:
+            log("mod_wsgi present (skip pip)")
     else:
-        log("mod_wsgi present (skip pip)")
+        # py36: the python3-mod_wsgi RPM was already added to setup_trac()'s
+        # dnf_install list above; nothing for us to install separately.
+        log("mod_wsgi from python3-mod_wsgi RPM (already installed)")
     # shim
     makedir(WSGI_DIR, 0o755)
     if write_file(SHIM_PATH, SHIM_CONTENT, 0o644, "apache", "apache"):
@@ -522,9 +626,10 @@ def _trac_modwsgi():
 
 
 def _trac_modpython():
-    # mod_python serves Trac in-process; ensure Trac is importable, the module is loaded,
-    # and mod_wsgi isn't.  mod_python comes from the hubzero (julian-el8) repo, built for
-    # the Python 2.7 it embeds.
+    # mod_python serves Trac in-process; ensure Trac is importable, the module
+    # is loaded, and mod_wsgi isn't.  mod_python comes from the hubzero
+    # (julian-el8) repo, built for the Python 2.7 it embeds.  Only valid with
+    # --python=py27 (main() rejects py36+mod_python upstream).
     _ensure_trac_installed()
     if not rpm_installed("mod_python"):
         dnf_install(["mod_python"])
@@ -545,6 +650,21 @@ def _modwsgi_so():
 
 
 def _ensure_modwsgi_loaded():
+    if PY[ARGS.python]["modwsgi_source"] == "rpm":
+        # py36: the python3-mod_wsgi RPM owns its own 10-wsgi-python3.conf
+        # (LoadModule wrapped in `<IfModule !wsgi_module>` so it self-defers
+        # if the py2 mod_wsgi is also loaded -- we have to make sure it
+        # ISN'T, by ALSO renaming the py27 conf if present).  Nothing for us
+        # to write; just ensure the py27 conf is out of the way.
+        log("mod_wsgi loaded via python3-mod_wsgi RPM "
+            f"({_modwsgi_conf_path()})")
+        py27_conf = PY["py27"]["modwsgi_conf"]
+        if os.path.exists(py27_conf):
+            _rename(py27_conf, py27_conf + ".disabled")
+        return
+    # py27: derive LoadModule + WSGIPythonHome from `mod_wsgi-express
+    # module-config` (the pip-installed mod_wsgi-express ships the right .so
+    # path for the running Py2) and write our own conf.
     out = _modwsgi_module_config()
     load = next((l for l in out.splitlines() if l.startswith("LoadModule")),
                 'LoadModule wsgi_module "<run mod_wsgi-express module-config>"')
@@ -552,13 +672,16 @@ def _ensure_modwsgi_loaded():
                 'WSGIPythonHome "/usr"')
     content = ("# Python2 mod_wsgi -- managed by hzforge\n"
                + load + "\n" + home + "\nWSGISocketPrefix run/wsgi\nWSGIRestrictEmbedded On\n")
-    if write_file(MODCONF_WSGI, content, 0o644):
+    if write_file(_modwsgi_conf_path(), content, 0o644):
         _mark()
 
 
 def _ensure_modwsgi_unloaded():
-    if os.path.exists(MODCONF_WSGI):
-        _rename(MODCONF_WSGI, MODCONF_WSGI + ".disabled")
+    # Both the py27 (hzforge-managed) and py36 (RPM-managed) confs need to be
+    # turned off if we're switching off mod_wsgi entirely.
+    for path in (PY["py27"]["modwsgi_conf"], PY["py36"]["modwsgi_conf"]):
+        if os.path.exists(path):
+            _rename(path, path + ".disabled")
 
 
 def _ensure_modpython_loaded():
@@ -753,7 +876,7 @@ def _pip_pkg_closure(roots):
         if key in seen:
             continue
         seen.add(key)
-        out = run(["pip2", "show", "-f", pkg], capture=True, check=False, mutating=False)
+        out = run([_pip(), "show", "-f", pkg], capture=True, check=False, mutating=False)
         if "Name:" not in out:
             continue                                  # not a pip package (skip rpm/unknown)
         loc, in_files = None, False
@@ -777,7 +900,7 @@ def fix_pip_perms():
     the root-umask-0077 problem, chmod a+rX just those packages' files."""
     if ARGS.trac_handler != "mod_wsgi" or "trac" not in ARGS.services:
         return
-    probe = subprocess.run(["runuser", "-u", "apache", "--", "python2", "-c", "import trac"],
+    probe = subprocess.run(["runuser", "-u", "apache", "--", _py(), "-c", "import trac"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            universal_newlines=True)
     if probe.returncode == 0:
@@ -1269,7 +1392,7 @@ def doctor():
             shim = os.path.exists(SHIM_PATH)
             _chk(r, "OK" if shim else "FAIL",
                  f"shim {'present' if shim else 'MISSING (repair)'}")
-        ti = subprocess.run(["runuser", "-u", "apache", "--", "python2", "-c", "import trac"],
+        ti = subprocess.run(["runuser", "-u", "apache", "--", _py(), "-c", "import trac"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, universal_newlines=True)
         if ti.returncode == 0:
             _chk(r, "OK", "apache can import Trac")
@@ -1291,6 +1414,10 @@ def doctor():
         # Trac's repo browser is optional -- only relevant when the svn service is
         # configured (it pulls subversion-python). Trac-without-svn is a valid config.
         if "svn" in services:
+            # subversion-python is Py2-only on Rocky 8 (RHEL8 dropped Py3 SWIG
+            # bindings).  This probe stays Py2 regardless of --python: if the
+            # daemon is py36 and svn.core isn't available, the repo browser
+            # degrades to an error -- same as Trac-without-svn.
             sc = subprocess.run(["runuser", "-u", "apache", "--", "python2", "-c", "import svn.core"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _chk(r, "OK" if sc.returncode == 0 else "WARN",
@@ -1694,12 +1821,25 @@ def build_parser():
     pi = sub.add_parser("install", parents=[common], help="install/wire services")
     pi.add_argument("services", nargs="*", metavar="SERVICE",
                     help=svc_help + "; default: all")
+    pi.add_argument("--python", choices=list(PY.keys()),
+                    default=INSTALL_DEFAULTS["python"], dest="python",
+                    help="python+Trac matrix: py27 (Trac 1.0.x, pip mod_wsgi) "
+                         "or py36 (Trac 1.6.x, dnf python3-mod_wsgi).  "
+                         "py36 requires --trac-handler=mod_wsgi.")
     pi.add_argument("--trac-handler", choices=["mod_wsgi", "mod_python"],
                     default=INSTALL_DEFAULTS["trac_handler"], dest="trac_handler")
     pi.add_argument("--svn-source", choices=["wandisco", "appstream"],
                     default=INSTALL_DEFAULTS["svn_source"], dest="svn_source")
-    pi.add_argument("--trac-spec", default=INSTALL_DEFAULTS["trac_spec"], dest="trac_spec")
-    pi.add_argument("--modwsgi-spec", default=INSTALL_DEFAULTS["modwsgi_spec"], dest="modwsgi_spec")
+    # --trac-spec / --modwsgi-spec defaults are resolved in main() from
+    # PY[args.python] AFTER argparsing (so an explicit value wins; otherwise
+    # the python-version-appropriate default takes over).
+    pi.add_argument("--trac-spec", default=None, dest="trac_spec",
+                    help="override Trac pip spec (default: per --python -- "
+                         f"py27={PY['py27']['trac_spec']!r}, "
+                         f"py36={PY['py36']['trac_spec']!r})")
+    pi.add_argument("--modwsgi-spec", default=None, dest="modwsgi_spec",
+                    help="override mod_wsgi pip spec (py27 only; py36 uses the "
+                         "python3-mod_wsgi RPM)")
     pi.add_argument("--ldap-url", dest="ldap_url")
     pi.add_argument("--ldap-binddn", dest="ldap_binddn")
     pi.add_argument("--ldap-bindpw", dest="ldap_bindpw",
@@ -1753,6 +1893,21 @@ def main():
     for attr, default in INSTALL_DEFAULTS.items():
         if not hasattr(args, attr):
             setattr(args, attr, default)
+
+    # Resolve python-version-dependent defaults AFTER argparsing -- an explicit
+    # --trac-spec / --modwsgi-spec on the command line wins, otherwise pick the
+    # appropriate default from the PY matrix.
+    if args.trac_spec is None:
+        args.trac_spec = PY[args.python]["trac_spec"]
+    if args.modwsgi_spec is None:
+        args.modwsgi_spec = PY[args.python]["modwsgi_pip_spec"]
+
+    # Matrix validation: py36 + mod_python is rejected -- mod_python upstream
+    # is Py2-only (last release 3.5.0, supports Py2.7 only).  py36 + mod_wsgi
+    # uses the python3-mod_wsgi RPM; py27 + either handler is the legacy path.
+    if args.python == "py36" and args.trac_handler == "mod_python":
+        die("--python=py36 + --trac-handler=mod_python is not a valid combination "
+            "(mod_python upstream is Python 2 only).  Use --trac-handler=mod_wsgi.")
 
     CTX = Ctx(args.dry)
     if os.geteuid() != 0:
