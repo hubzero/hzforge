@@ -513,8 +513,18 @@ def _enable_svn_source():
         # (dnf won't switch streams without an explicit reset).
         if _svn_module_stream():
             run(["dnf", "-y", "module", "reset", "subversion"], check=False)
-        run(["dnf", "-y", "module", "enable",
-             f"subversion:{target_stream}"], check=False)
+        # check=True: a failed module-enable must abort with a clear error.
+        # ensure_subversion_packages() calls this AFTER a cutover has already
+        # `dnf remove`d subversion+mod_dav_svn, so a silently-swallowed
+        # failure here would let the subsequent reinstall pull the WRONG
+        # stream (or fail) -- leaving SVN DAV down with no rollback.  Fail
+        # loud instead.
+        run(["dnf", "-y", "module", "enable", f"subversion:{target_stream}"])
+        if not CTX.dry and _svn_module_stream() != target_stream:
+            die(f"failed to enable subversion:{target_stream} module stream "
+                f"(now: {_svn_module_stream() or 'none'}); subversion may be "
+                f"uninstalled after a source switch -- fix the module state "
+                f"and re-run `hzforge install svn`.")
     else:
         log(f"subversion module: {target_stream} already enabled")
 
@@ -542,8 +552,14 @@ def _svn_installed_source():
     repo = m.group(1).lower()
     if "wandisco" in repo:
         return "wandisco"
-    if repo in ("appstream", "anaconda", "@system", "system"):
+    if repo == "appstream":
         return "appstream"
+    # `@System` / `@anaconda` / anything else == provenance we can't pin to a
+    # source we manage.  Report "other" so ensure_subversion_packages LEAVES
+    # IT ALONE rather than triggering a destructive remove+reinstall cutover
+    # on a package we didn't install.  (The old code mis-classified these as
+    # "appstream", contradicting this function's own docstring and risking a
+    # cutover that removes an operator's preinstalled subversion.)
     return "other"
 
 
@@ -993,13 +1009,48 @@ def _ldap_bindpw():
         except OSError as e:
             die(f"--ldap-bindpw-file: cannot read {path}: {e}")
         if mode & 0o077:
-            warn(f"{path} is group/other-accessible (mode {mode:o}); chmod 600 it")
-        return pw
+            # The bind password is a secret; a group/other-readable file
+            # defeats the point.  Fatal, not a warning -- proceeding would
+            # embed a secret the operator was just told is exposed.
+            die(f"--ldap-bindpw-file {path} is group/other-accessible "
+                f"(mode {mode:o}); chmod 600 it and re-run.")
+        return _validated_bindpw(pw)
     if ARGS.ldap_bindpw:
         warn("--ldap-bindpw exposes the password in the process list; "
              "prefer --ldap-bindpw-file")
-        return ARGS.ldap_bindpw
-    return _grep_conf("AuthLDAPBindPassword")
+        return _validated_bindpw(ARGS.ldap_bindpw)
+    # Harvested from an existing conf, where the value is written as a
+    # quoted Apache token (`AuthLDAPBindPassword "secret"`).  _grep_conf
+    # returns it WITH the surrounding quotes, so strip one pair before
+    # validating + re-emitting (we add our own quotes in _auth_block).
+    return _validated_bindpw(_unquote(_grep_conf("AuthLDAPBindPassword")))
+
+
+def _unquote(s):
+    """Strip one pair of surrounding double-quotes from an Apache config
+    token, if present.  None/empty passes through."""
+    if s and len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return s[1:-1]
+    return s
+
+
+def _validated_bindpw(pw):
+    """Reject a bind password that would break out of the Apache config it
+    gets written into.  `_auth_block` interpolates the password into a
+    vhost-scope `AuthLDAPBindPassword ...` directive; a value containing a
+    newline (possible from a bindpw FILE with an embedded `\\n` -- `.strip()`
+    only trims the ends) or a literal `"` could inject arbitrary Apache
+    directives into a file Apache runs as root.  Empty/None passes through
+    (means 'no LDAP block')."""
+    if not pw:
+        return pw
+    if "\n" in pw or "\r" in pw:
+        die("LDAP bind password contains a newline -- refusing (would "
+            "inject directives into the vhost config).")
+    if '"' in pw:
+        die('LDAP bind password contains a double-quote -- refusing '
+            '(would break out of the AuthLDAPBindPassword directive).')
+    return pw
 
 
 def _auth_block():
@@ -1016,7 +1067,9 @@ def _auth_block():
             '    AuthName "HUBzero Trac"\n'
             '    AuthLDAPURL ' + url + '\n'
             '    AuthLDAPBindDN ' + binddn + '\n'
-            '    AuthLDAPBindPassword ' + bindpw + '\n'
+            # Quoted so a password with spaces works; _validated_bindpw has
+            # already rejected embedded `"`/newlines, so the quoting is safe.
+            '    AuthLDAPBindPassword "' + bindpw + '"\n'
             '    Require valid-user\n'
             '</LocationMatch>')
 
@@ -1700,18 +1753,30 @@ def _ensure_components_enabled(trac_ini, key, value="enabled"):
         return False
     with open(trac_ini) as fh:
         text = fh.read()
-    # Already enabled?  Match the exact `key = value` line anywhere in the file.
+    # Already set to the desired value?  Exact `key = value` -> no-op.
     if re.search(r'^\s*' + re.escape(key) + r'\s*=\s*' + re.escape(value) + r'\s*$',
                  text, re.M):
         return False
-    sec = re.search(r'^\[components\]\s*$', text, re.M)
-    if sec:
-        end = sec.end()
-        new_text = text[:end] + "\n" + key + " = " + value + text[end:]
+    # Key present with a DIFFERENT value (e.g. `hubzero_cmsauth.* = disabled`
+    # when we want `enabled`, or `LoginModule = enabled` when we want
+    # `disabled`)?  REPLACE that line in place.  The old code only matched
+    # the exact pair, so it inserted a SECOND conflicting line at the top of
+    # [components]; ConfigParser takes the last occurrence, so the old
+    # (wrong) value below still won -> the enable/disable silently failed.
+    key_line_re = re.compile(r'^([ \t]*)' + re.escape(key) + r'[ \t]*=[ \t]*\S.*$',
+                             re.M)
+    if key_line_re.search(text):
+        new_text = key_line_re.sub(lambda m: m.group(1) + key + " = " + value,
+                                   text, count=1)
     else:
-        if not text.endswith("\n"):
-            text += "\n"
-        new_text = text + "\n[components]\n" + key + " = " + value + "\n"
+        sec = re.search(r'^\[components\]\s*$', text, re.M)
+        if sec:
+            end = sec.end()
+            new_text = text[:end] + "\n" + key + " = " + value + text[end:]
+        else:
+            if not text.endswith("\n"):
+                text += "\n"
+            new_text = text + "\n[components]\n" + key + " = " + value + "\n"
     if CTX.dry:
         log(f"[dry-run] enable [components] {key} = {value} in {trac_ini}")
         _mark()

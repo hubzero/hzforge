@@ -887,3 +887,148 @@ def test_switch_svn_source_removes_both_py_bindings(monkeypatch, tmp_path):
     assert "mod_dav_svn" in remove_cmd
     assert "subversion-python" in remove_cmd
     assert "python3-subversion" in remove_cmd
+
+
+# --- H3: _ensure_components_enabled replaces a conflicting value in place --- #
+
+def test_ensure_components_replaces_conflicting_value(tmp_path, monkeypatch):
+    """If the key exists with a DIFFERENT value (the env was previously
+    explicitly disabled), REPLACE it in place -- don't insert a second
+    conflicting line that ConfigParser's last-wins would let the old value
+    still win.  This is the H3 fix; the old code silently failed to enable."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    ini = tmp_path / "trac.ini"
+    ini.write_text("[components]\nhubzero_cmsauth.* = disabled\n")
+    changed = hz._ensure_components_enabled(str(ini), "hubzero_cmsauth.*", "enabled")
+    assert changed is True
+    body = ini.read_text()
+    assert "hubzero_cmsauth.* = enabled" in body
+    assert "disabled" not in body                 # old value GONE, not duplicated
+    assert body.count("hubzero_cmsauth.*") == 1   # exactly one line for the key
+
+
+def test_ensure_components_replaces_loginmodule_enabled_to_disabled(tmp_path, monkeypatch):
+    """The mirror case enable-cmsauth relies on: turn an explicitly-enabled
+    LoginModule into disabled, in place."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    ini = tmp_path / "trac.ini"
+    ini.write_text("[components]\ntrac.web.auth.LoginModule = enabled\n")
+    changed = hz._ensure_components_enabled(
+        str(ini), "trac.web.auth.LoginModule", "disabled")
+    assert changed is True
+    body = ini.read_text()
+    assert "trac.web.auth.LoginModule = disabled" in body
+    assert body.count("trac.web.auth.LoginModule") == 1
+    assert "= enabled" not in body
+
+
+def test_ensure_components_replace_preserves_indent(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    ini = tmp_path / "trac.ini"
+    ini.write_text("[components]\n    hubzero_cmsauth.* = disabled\n")
+    hz._ensure_components_enabled(str(ini), "hubzero_cmsauth.*", "enabled")
+    assert "    hubzero_cmsauth.* = enabled" in ini.read_text()
+
+
+def test_ensure_components_no_op_when_already_correct(tmp_path, monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    ini = tmp_path / "trac.ini"
+    ini.write_text("[components]\nhubzero_cmsauth.* = enabled\n")
+    assert hz._ensure_components_enabled(str(ini), "hubzero_cmsauth.*", "enabled") is False
+
+
+# --- H2: LDAP bind-password validation --- #
+
+def test_validated_bindpw_rejects_newline(monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    with pytest.raises(SystemExit):
+        hz._validated_bindpw("secret\n    Require all granted")
+
+
+def test_validated_bindpw_rejects_carriage_return(monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    with pytest.raises(SystemExit):
+        hz._validated_bindpw("secret\rinjected")
+
+
+def test_validated_bindpw_rejects_doublequote(monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    with pytest.raises(SystemExit):
+        hz._validated_bindpw('sec"ret')
+
+
+def test_validated_bindpw_allows_normal_password(monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    assert hz._validated_bindpw("EI0jWlIyRzFza+SiMXzh") == "EI0jWlIyRzFza+SiMXzh"
+    assert hz._validated_bindpw("with spaces ok") == "with spaces ok"
+
+
+def test_validated_bindpw_passes_through_empty(monkeypatch):
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    assert hz._validated_bindpw("") == ""
+    assert hz._validated_bindpw(None) is None
+
+
+def test_ldap_bindpw_file_loose_perms_now_fatal(tmp_path, monkeypatch):
+    """H2: a group/other-readable bindpw file is now FATAL, not a warning
+    (proceeding would embed a secret the operator was told is exposed)."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    f = tmp_path / "pw"
+    f.write_text("s3cret")
+    os.chmod(str(f), 0o644)
+    monkeypatch.setattr(hz, "ARGS", make_args(ldap_bindpw_file=str(f)), raising=False)
+    with pytest.raises(SystemExit):
+        hz._ldap_bindpw()
+
+
+def test_auth_block_quotes_password(tmp_path, monkeypatch):
+    """The emitted directive quotes the password (safe now that embedded
+    quotes/newlines are rejected upstream).  Hermetic: include_dir points
+    at an empty tmp dir so _grep_conf can't read host LDAP confs."""
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "ARGS",
+                        make_args(include_dir=str(tmp_path),
+                                  ldap_url="ldap://x/dc=y", ldap_binddn="cn=s,dc=y",
+                                  ldap_bindpw="p@ss word"), raising=False)
+    block = hz._auth_block()
+    assert block != ""
+    assert 'AuthLDAPBindPassword "p@ss word"' in block
+
+
+def test_unquote_strips_one_pair(monkeypatch):
+    assert hz._unquote('"secret"') == "secret"
+    assert hz._unquote('secret') == "secret"       # no quotes -> unchanged
+    assert hz._unquote('"a"b"') == 'a"b'           # only outer pair
+    assert hz._unquote(None) is None
+
+
+# --- H1 / svn classification: @System -> "other" (leave alone) --- #
+
+@pytest.mark.parametrize("dnf_output,expected", [
+    ("Installed Packages\nsubversion.x86_64  1.10.2-5.module  @appstream\n", "appstream"),
+    ("Installed Packages\nsubversion.x86_64  1.10.7-1.x86_64  @wandisco-svn110\n", "wandisco"),
+    # @System / @anaconda / unknown -> "other" so the cutover leaves it alone
+    ("Installed Packages\nsubversion.x86_64  1.10.2-5  @System\n", "other"),
+    ("Installed Packages\nsubversion.x86_64  1.10.2-5  @anaconda\n", "other"),
+    ("Installed Packages\nsubversion.x86_64  1.10.2-1  @local-build\n", "other"),
+])
+def test_svn_installed_source_system_is_other(monkeypatch, dnf_output, expected):
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: p == "subversion")
+    monkeypatch.setattr(hz, "_out", lambda cmd: dnf_output)
+    assert hz._svn_installed_source() == expected
+
+
+def test_ensure_subversion_leaves_other_source_alone(monkeypatch):
+    """@System-sourced subversion (now 'other') must NOT trigger a
+    destructive remove+reinstall cutover."""
+    monkeypatch.setattr(hz, "ARGS", make_args(svn_source="appstream", python="py27"),
+                        raising=False)
+    monkeypatch.setattr(hz, "CTX", hz.Ctx(False), raising=False)
+    monkeypatch.setattr(hz, "_SVN_PKGS_DONE", False, raising=False)
+    monkeypatch.setattr(hz, "_svn_installed_source", lambda: "other")
+    monkeypatch.setattr(hz, "rpm_installed", lambda p: True)
+    switches = []
+    monkeypatch.setattr(hz, "_switch_svn_source",
+                        lambda *a, **k: switches.append(a))
+    hz.ensure_subversion_packages()
+    assert switches == []
