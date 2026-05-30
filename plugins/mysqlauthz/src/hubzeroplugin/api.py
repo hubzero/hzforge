@@ -493,32 +493,15 @@ class HubzeroPermissionStore(Component):
                         cursor.execute('INSERT IGNORE INTO jos_trac_group_permission (group_id,action,trac_project_id) VALUE (%s,%s,%s);',
                                        (gidNumber, action, self.project_id))
                 else:
-                    if username and username != 'anonymous' and username != 'authenticated':
-                        cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
-                        row = cursor.fetchone()
-                        if row:
-                            uidNumber = str(row[0])
-
-                        if action.startswith('@'):
-                            action = action[1:]
-                            cursor.execute('SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, '
-                                           'jos_trac_project AS proj, jos_tool AS t '
-                                           "WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid "
-                                           "AND CONCAT('app:',t.toolname)=proj.name "
-                                           'AND proj.id=%s AND g.cn=%s',
-                                           (self.project_id, action))
-                            row = cursor.fetchone()
-                            if row:
-                                gidNumber = str(row[0])
-
-                        # Group membership is intentionally managed only via the
-                        # HUBzero CMS (so LDAP sync stays consistent); this plugin
-                        # never INSERTs into jos_xgroups_members.  The previous
-                        # implementation reached this point with `if True:` and a
-                        # dead-code `elif gidNumber is not None and uidNumber is
-                        # not None: cursor.execute(INSERT IGNORE INTO
-                        # jos_xgroups_members ...)` -- dropped.
-                        self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
+                    # A non-uppercase "action" is a group-membership pseudo-
+                    # action (the upstream convention).  This plugin NEVER
+                    # writes group membership (jos_xgroups_members) -- that's
+                    # managed exclusively by the HUBzero CMS so LDAP sync stays
+                    # consistent.  So there is nothing to do here but say so.
+                    # (Pre-2.4.5 this branch ran 1-2 SELECTs to compute
+                    # uidNumber/gidNumber and then discarded them -- pure dead
+                    # code; dropped.)
+                    self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
             self._mark_db_success()
         except Exception:
             self._mark_db_error()
@@ -574,26 +557,12 @@ class HubzeroPermissionStore(Component):
                                        'WHERE trac_project_id=%s AND group_id=%s AND action=%s;',
                                        (self.project_id, gidNumber, action))
                 else:
-                    if username and username != 'anonymous' and username != 'authenticated':
-                        cursor.execute('SELECT id FROM jos_users WHERE username=%s', (username,))
-                        row = cursor.fetchone()
-                        if row:
-                            uidNumber = str(row[0])
-
-                        if action.startswith('@'):
-                            action = action[1:]
-                        cursor.execute('SELECT g.gidNumber from jos_xgroups AS g, jos_tool_groups AS tg, '
-                                       'jos_trac_project AS proj, jos_tool AS t '
-                                       "WHERE tg.role=1 AND g.cn=tg.cn AND t.id=tg.toolid "
-                                       "AND CONCAT('app:',t.toolname)=proj.name "
-                                       'AND proj.id=%s AND g.cn=%s',
-                                       (self.project_id, action))
-                        row = cursor.fetchone()
-                        if row:
-                            gidNumber = str(row[0])
-
-                        # Same policy as grant_permission: group membership is
-                        # managed only via the HUBzero CMS for LDAP-sync
+                    # Symmetric with grant_permission: a non-uppercase "action" is a
+                    # group-membership pseudo-action this plugin never writes
+                    # (CMS-managed for LDAP-sync).  Pre-2.4.5 this branch ran SELECTs
+                    # and discarded the results -- dead code, and the @group SELECT
+                    # here ran unconditionally (an asymmetry vs grant); dropped.
+                    self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
                         # reasons.  Dropping the dead `elif gidNumber is not
                         # None and uidNumber is not None:` block that would
                         # have DELETEd from jos_xgroups_members / _managers.
