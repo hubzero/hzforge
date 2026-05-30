@@ -212,6 +212,32 @@ def test_call_api_uses_http_when_scheme_is_http(sso, make_req, http_stub):
     assert http_stub.last_conn.port == 80
 
 
+def test_call_api_verifies_tls_by_default(sso, make_req, http_stub):
+    """Default (`verify_tls = True`): the HTTPSConnection gets the stdlib
+    default context, which validates the cert chain and checks the
+    hostname.  Closes the MITM hole the 1.0.0 path left open by hardcoding
+    CERT_NONE."""
+    import ssl
+    req = make_req(cookie="jos_session=sid")
+    sso.authenticate(req)
+    ctx = http_stub.last_conn.kw["context"]
+    assert ctx.verify_mode  == ssl.CERT_REQUIRED    # stdlib default
+    assert ctx.check_hostname is True               # stdlib default
+
+
+def test_call_api_skips_tls_verify_when_opted_out(sso, make_req, http_stub):
+    """`verify_tls = false` in trac.ini (operator opt-out for hosts whose
+    CMS cert can't be validated -- self-signed dev hubs).  Falls back to
+    1.0.0 behavior: CERT_NONE + hostname check off."""
+    import ssl
+    sso.verify_tls = False                          # simulate trac.ini override
+    req = make_req(cookie="jos_session=sid")
+    sso.authenticate(req)
+    ctx = http_stub.last_conn.kw["context"]
+    assert ctx.verify_mode  == ssl.CERT_NONE
+    assert ctx.check_hostname is False
+
+
 def test_call_api_honors_explicit_port_in_host_header(sso, make_req, http_stub):
     """HTTP_HOST may carry 'host:port'; we split it for the connect
     target but keep the verbatim string in the Host header (which is
@@ -437,9 +463,39 @@ def test_redirect_back_for_logout_carries_correct_env_in_return_url(
 # Helpers
 # ============================================================================ #
 
-def test_cookie_header_from_environ(sso, make_req):
+def test_cookie_header_strips_trac_auth_morsel(sso, make_req):
+    """_cookie_header MUST drop the `trac_auth=...` morsel before forwarding
+    to the CMS API.  Defense-in-depth: the CMS doesn't recognize Trac's
+    own session cookie and just discards it, but exposing the value to any
+    logging / proxy / request-id capture on the CMS path is unhygienic."""
     req = make_req(cookie="a=1; b=2; trac_auth=xyz")
-    assert sso._cookie_header(req) == "a=1; b=2; trac_auth=xyz"
+    assert sso._cookie_header(req) == "a=1; b=2"
+
+
+def test_cookie_header_strips_trac_auth_when_only_morsel(sso, make_req):
+    """If trac_auth is the ONLY cookie, return empty string -- no API call
+    will be made downstream (the empty header short-circuits the call)."""
+    req = make_req(cookie="trac_auth=xyz")
+    assert sso._cookie_header(req) == ""
+
+
+def test_cookie_header_strips_trac_auth_at_start_or_end(sso, make_req):
+    """Position-agnostic: trac_auth at start, middle, or end is all
+    handled the same way."""
+    assert sso._cookie_header(make_req(cookie="trac_auth=x; jos=y")) == "jos=y"
+    assert sso._cookie_header(make_req(cookie="jos=y; trac_auth=x")) == "jos=y"
+    assert sso._cookie_header(make_req(cookie="a=1; trac_auth=x; b=2")) == "a=1; b=2"
+
+
+def test_cookie_header_preserves_lookalike_cookie_names(sso, make_req):
+    """Cookies whose names merely START with `trac_auth` (e.g. `trac_auth2`
+    or `trac_authority`) are NOT stripped -- our match is on the exact name
+    followed by `=`.  Same for case variants (RFC 6265 cookie names are
+    case-sensitive; Trac sets exactly `trac_auth`)."""
+    assert "trac_auth2=keep" in sso._cookie_header(
+        make_req(cookie="trac_auth2=keep; trac_auth=drop"))
+    assert "Trac_Auth=keep" in sso._cookie_header(
+        make_req(cookie="Trac_Auth=keep; trac_auth=drop"))
 
 
 def test_cookie_header_empty_when_no_environ(sso, make_req):

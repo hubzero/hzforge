@@ -197,6 +197,20 @@ DELETE-then-redirect.
 
 - **First release:** `1.0.0` (hzforge, 2026-05-28). No upstream — this
   is a new plugin written for hzforge.
+- **`1.0.3`** (2026-05-29) — two defense-in-depth tweaks:
+  - **TLS verification default-on.** `_call_api` now uses
+    `ssl.create_default_context()` as-is (validates cert chain + checks
+    hostname against the system trust store), instead of hardcoding
+    `CERT_NONE`. Operators of hosts whose local CMS cert can't be
+    validated (self-signed dev hubs) can opt out via
+    `[hubzero_cmsauth] verify_tls = false`. The 1.0.0–1.0.2 path was
+    effectively a permanent CMS-side-MITM opt-in.
+  - **`trac_auth` cookie filtered before forwarding to the CMS API.**
+    `_cookie_header` now strips the `trac_auth=<value>` morsel via
+    `_strip_cookie(raw, "trac_auth")`. The CMS doesn't recognize Trac's
+    own session cookie, but exposing the value to any logging / proxy /
+    request-id capture on the CMS path is unhygienic. Cookie-name
+    comparison is case-sensitive per RFC 6265.
 - **`1.0.2`** (2026-05-29) — one security fix in `_call_api`'s
   response handling:
   - **Reserved-username guard.** If the CMS API ever returns

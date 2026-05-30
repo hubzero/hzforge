@@ -57,7 +57,7 @@ try:                                      # Py3
 except ImportError:                       # Py2
     from httplib import HTTPSConnection, HTTPConnection   # noqa: F401
 
-from trac.config import IntOption, Option
+from trac.config import BoolOption, IntOption, Option
 from trac.web.auth import LoginModule
 
 
@@ -97,6 +97,15 @@ class HubzeroSSOLoginModule(LoginModule):
         "hubzero_cmsauth", "api_timeout_seconds", 5,
         "Per-request timeout for the CMS API call.  Loopback responses are "
         "sub-millisecond; the timeout is a safety net against API hangs.",
+    )
+    verify_tls = BoolOption(
+        "hubzero_cmsauth", "verify_tls", True,
+        "Verify the CMS API's TLS certificate.  Default true (validate "
+        "against the system trust store + RFC 2818 hostname check, the "
+        "stdlib `ssl.create_default_context` default).  Set false ONLY "
+        "for hosts whose local CMS cert can't be validated -- e.g. a "
+        "self-signed dev hub.  Default-on closes a MITM hole the 1.0.0 "
+        "code path left open by hardcoding `CERT_NONE`.",
     )
 
     # --- CMS redirect URLs ------------------------------------------------- #
@@ -231,8 +240,13 @@ class HubzeroSSOLoginModule(LoginModule):
             port = 443 if scheme == "https" else 80
         if scheme == "https":
             ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE   # same-origin -- no MITM risk
+            if not self.verify_tls:
+                # Operator opt-out -- only legitimate when the CMS cert
+                # can't be validated by the system trust store (self-signed
+                # dev hub).  Default-on (verify_tls = True in trac.ini)
+                # keeps the cert chain + hostname check intact.
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
             conn = HTTPSConnection(host, port,
                                    timeout=self.api_timeout_seconds,
                                    context=ctx)
@@ -282,16 +296,35 @@ class HubzeroSSOLoginModule(LoginModule):
 
     @staticmethod
     def _cookie_header(req):
-        """Raw Cookie header as the browser sent it (parent's req.incookie
-        is parsed; the API call wants the original string)."""
+        """Raw Cookie header as the browser sent it, with the `trac_auth`
+        morsel filtered out (parent's req.incookie is parsed; the API call
+        wants the string form).
+
+        Why strip trac_auth: it's Trac's own session cookie, set by
+        `LoginModule._do_login` after a successful auth.  The CMS doesn't
+        recognize it and just discards it -- so forwarding it leaks no
+        secret per se, but exposes the value to any logging / proxy /
+        request-id capture on the CMS path that has nothing to do with
+        Trac.  Defense-in-depth: don't send Trac internals to a service
+        that has no need for them."""
         env = getattr(req, "environ", None) or {}
         raw = env.get("HTTP_COOKIE") or ""
-        if raw:
-            return raw
-        try:
-            return req.incookie.output(header="", sep="; ").strip()
-        except AttributeError:
-            return ""
+        if not raw:
+            try:
+                raw = req.incookie.output(header="", sep="; ").strip()
+            except AttributeError:
+                return ""
+        return HubzeroSSOLoginModule._strip_cookie(raw, "trac_auth")
+
+    @staticmethod
+    def _strip_cookie(raw, name):
+        """Return `raw` with the cookie morsel named `name` removed.
+        Cookie-name comparison is case-sensitive (RFC 6265 cookie names
+        are case-sensitive; Trac sets `trac_auth` in exactly that form)."""
+        prefix = name + "="
+        morsels = [m.strip() for m in raw.split(";")]
+        morsels = [m for m in morsels if m and not m.startswith(prefix)]
+        return "; ".join(morsels)
 
     def _redirect_to_cms(self, req, cms_path, return_to):
         """302 to `<cms_scheme>://<cms_host><cms_path>?return=<base64(return_to)>`.
