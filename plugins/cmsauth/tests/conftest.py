@@ -122,7 +122,16 @@ class _FakeReq(object):
         self.path_info = path_info
         self.environ   = environ or {}
         self.incookie  = incookie or {}
-        self.outcookie = {}
+        # Real Trac: req.outcookie is a Cookie.SimpleCookie / http.cookies
+        # SimpleCookie -- assigning `c["name"] = value` creates a Morsel
+        # whose attributes (path, secure, httponly, max-age, ...) can be
+        # set via `c["name"]["path"] = "/x"`.  Use the real SimpleCookie so
+        # tests exercise the same morsel API the production code expects.
+        try:                                          # Py3
+            from http.cookies import SimpleCookie
+        except ImportError:                           # Py2
+            from Cookie import SimpleCookie
+        self.outcookie = SimpleCookie()
         self.args      = args or {}
         self.authname  = authname
         self.abs_href  = _FakeHref(abs_base)
@@ -174,20 +183,28 @@ def RedirectDone():
 
 @pytest.fixture
 def env():
-    """A minimal env stand-in.  Includes a `db_transaction(sql, params)`
-    that records calls (used by _do_logout's DELETE branch) -- we don't
-    pretend to actually run SQL, just record that the right SQL with the
-    right params was issued."""
+    """A minimal env stand-in.  Records DB calls without pretending to run
+    SQL.  Tests stage rows for db_query via `env.db_query_responses`
+    (FIFO list of result-sets); tests inspect db_transaction calls via
+    `env.db_transactions`."""
     class _Log(object):
         def __init__(self): self.records = []
         def debug(self,   *a): self.records.append(('debug',   a))
+        def info(self,    *a): self.records.append(('info',    a))
         def warning(self, *a): self.records.append(('warning', a))
     class _Env(object):
         def __init__(self):
             self.log = _Log()
-            self.db_transactions = []      # list of (sql, params)
+            self.db_transactions = []        # list of (sql, params)
+            self.db_queries      = []        # list of (sql, params)
+            self.db_query_responses = []     # FIFO: next call returns first list
         def db_transaction(self, sql, params=None):
             self.db_transactions.append((sql, params))
+        def db_query(self, sql, params=None):
+            self.db_queries.append((sql, params))
+            if self.db_query_responses:
+                return self.db_query_responses.pop(0)
+            return []
     return _Env()
 
 

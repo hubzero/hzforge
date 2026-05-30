@@ -522,3 +522,184 @@ def test_b64_uses_urlsafe_alphabet(sso):
     assert encoded == "Pz8_"               # urlsafe-alphabet output
     assert "/" not in encoded              # the security property
     assert "+" not in encoded
+
+
+# ============================================================================ #
+# Periodic CMS re-check (review #4)
+#
+# The trac_auth fast path doesn't re-validate the user against the CMS, so a
+# rename/deactivation in the CMS isn't visible to Trac until the cookie
+# expires (default 7 days).  recheck_interval_seconds > 0 forces a re-check
+# every N seconds on warm-cache requests; mismatch invalidates trac_auth.
+# ============================================================================ #
+
+import time as _time
+
+# --- _should_recheck (the "is the window up?" gatekeeper) --- #
+
+def test_should_recheck_returns_false_when_interval_is_zero(sso, make_req):
+    """The knob defaults to 0 (off).  In that case, no recheck happens
+    regardless of the cookie state -- preserves existing back-compat
+    behavior for operators who haven't opted in."""
+    sso.recheck_interval_seconds = 0
+    req = make_req(cookie="trac_auth=t; hubzero_cms_check=1")
+    class _M(object): value = "1"
+    req.incookie["hubzero_cms_check"] = _M()
+    assert sso._should_recheck(req) is False
+
+
+def test_should_recheck_true_when_check_cookie_absent(sso, make_req):
+    """recheck enabled + no recheck cookie yet -> force a check on this
+    request (covers first hit after the operator enables the knob)."""
+    sso.recheck_interval_seconds = 60
+    req = make_req(cookie="trac_auth=t")
+    assert sso._should_recheck(req) is True
+
+
+def test_should_recheck_false_when_check_cookie_recent(sso, make_req):
+    """recheck cookie was stamped < interval ago -> within the window,
+    no recheck."""
+    sso.recheck_interval_seconds = 300
+    fresh_ts = str(int(_time.time() - 5))                 # 5 seconds ago
+    req = make_req(cookie="trac_auth=t")
+    class _M(object): value = fresh_ts
+    req.incookie["hubzero_cms_check"] = _M()
+    assert sso._should_recheck(req) is False
+
+
+def test_should_recheck_true_when_check_cookie_stale(sso, make_req):
+    """recheck cookie was stamped > interval ago -> window expired,
+    re-check this request."""
+    sso.recheck_interval_seconds = 300
+    stale_ts = str(int(_time.time() - 1000))              # 1000 seconds ago
+    req = make_req(cookie="trac_auth=t")
+    class _M(object): value = stale_ts
+    req.incookie["hubzero_cms_check"] = _M()
+    assert sso._should_recheck(req) is True
+
+
+def test_should_recheck_true_when_cookie_value_unparseable(sso, make_req):
+    """A tampered / corrupted timestamp value -> treat as a missing
+    cookie, re-check.  Tampering can at most defer one re-check, never
+    grant authentication, so loose parsing is fine."""
+    sso.recheck_interval_seconds = 300
+    req = make_req(cookie="trac_auth=t")
+    class _M(object): value = "not-a-number"
+    req.incookie["hubzero_cms_check"] = _M()
+    assert sso._should_recheck(req) is True
+
+
+# --- authenticate() integration with recheck --- #
+
+def test_authenticate_skips_recheck_when_disabled(sso, make_req, http_stub):
+    """recheck_interval_seconds=0 + warm cache: behaves exactly like
+    pre-1.0.4 -- no API hit, just delegate to parent."""
+    sso.recheck_interval_seconds = 0
+    class _M(object): value = "abc"
+    req = make_req(cookie="trac_auth=abc")
+    req.incookie["trac_auth"] = _M()
+    sso.authenticate(req)
+    assert http_stub.last_conn is None                    # no API call
+    assert req._super_calls == ["authenticate"]
+
+
+def test_authenticate_skips_recheck_when_window_fresh(sso, make_req, http_stub):
+    """Warm cache + recheck enabled + recent check timestamp -> no API
+    call this request."""
+    sso.recheck_interval_seconds = 300
+    class _AM(object): value = "abc"
+    class _CM(object): value = str(int(_time.time() - 5))
+    req = make_req(cookie="trac_auth=abc; hubzero_cms_check=5")
+    req.incookie["trac_auth"] = _AM()
+    req.incookie["hubzero_cms_check"] = _CM()
+    sso.authenticate(req)
+    assert http_stub.last_conn is None                    # no API call
+    assert req._super_calls == ["authenticate"]
+
+
+def test_authenticate_recheck_continues_on_same_name(sso, env, make_req, http_stub):
+    """Warm cache + recheck expired + CMS returns the SAME username ->
+    don't invalidate; just re-stamp the recheck cookie and continue.
+
+    Note: in real browser traffic, the request carries BOTH the trac_auth
+    cookie (the Trac fast-path key) AND the CMS session cookie (jos_session
+    or similar).  _cookie_header() strips trac_auth before forwarding, so
+    the CMS receives the session cookie alone -- which is exactly what it
+    needs to authenticate the user.  Tests must therefore include BOTH
+    cookies in `cookie=` to mirror production."""
+    sso.recheck_interval_seconds = 300
+    # Stage CMS API to return "jdoe"
+    http_stub.stage_response(200, b'{"profile":{"id":1,"username":"jdoe"}}')
+    # Stage Trac auth_cookie lookup to also return "jdoe"
+    env.db_query_responses.append([("jdoe",)])
+    class _AM(object): value = "abc"
+    class _CM(object): value = str(int(_time.time() - 1000))   # stale
+    req = make_req(cookie="trac_auth=abc; jos_session=sid")
+    req.incookie["trac_auth"] = _AM()
+    req.incookie["hubzero_cms_check"] = _CM()
+    sso.authenticate(req)
+    # API was called (recheck happened) but Trac state was NOT invalidated
+    assert http_stub.last_conn is not None
+    assert env.db_transactions == []                      # no DELETE
+    assert "trac_auth" in req.incookie                    # NOT removed
+    # And the recheck cookie was re-stamped (a fresh timestamp)
+    assert "hubzero_cms_check" in req.outcookie
+    new_ts = int(req.outcookie["hubzero_cms_check"].value)
+    assert new_ts > int(_time.time()) - 5                  # within last 5s
+
+
+def test_authenticate_recheck_invalidates_on_username_rename(
+        sso, env, make_req, http_stub):
+    """Warm cache + recheck expired + CMS returns a DIFFERENT username ->
+    invalidate trac_auth (DELETE auth_cookie row, expire cookie, remove
+    from incookie so parent sees anonymous)."""
+    sso.recheck_interval_seconds = 300
+    http_stub.stage_response(200, b'{"profile":{"id":1,"username":"alyssa"}}')
+    env.db_query_responses.append([("alice",)])           # Trac-side name
+    class _AM(object): value = "abc"
+    class _CM(object): value = str(int(_time.time() - 1000))
+    req = make_req(cookie="trac_auth=abc; jos_session=sid")
+    req.incookie["trac_auth"] = _AM()
+    req.incookie["hubzero_cms_check"] = _CM()
+    sso.authenticate(req)
+    # auth_cookie row was DELETEd
+    assert env.db_transactions, "expected a DELETE FROM auth_cookie"
+    sql, params = env.db_transactions[0]
+    assert sql.startswith("DELETE FROM auth_cookie")
+    assert params == ("abc",)
+    # trac_auth removed from incookie -> parent sees anonymous
+    assert "trac_auth" not in req.incookie
+    # _expire_cookie was called (via super)
+    assert "_expire_cookie" in req._super_calls
+
+
+def test_authenticate_recheck_invalidates_on_deactivation(
+        sso, env, make_req, http_stub):
+    """Warm cache + recheck expired + CMS returns 403 / no session ->
+    same invalidation as a rename: user gets kicked back to anonymous."""
+    sso.recheck_interval_seconds = 300
+    http_stub.stage_response(403, b'{"message":"Access Denied"}')
+    env.db_query_responses.append([("alice",)])
+    class _AM(object): value = "abc"
+    class _CM(object): value = str(int(_time.time() - 1000))
+    req = make_req(cookie="trac_auth=abc; jos_session=sid")
+    req.incookie["trac_auth"] = _AM()
+    req.incookie["hubzero_cms_check"] = _CM()
+    sso.authenticate(req)
+    assert any(sql.startswith("DELETE FROM auth_cookie")
+               for sql, _p in env.db_transactions)
+    assert "trac_auth" not in req.incookie
+
+
+# --- _do_login stamps the recheck cookie on a fresh login --- #
+
+def test_do_login_stamps_recheck_cookie(sso, make_req):
+    """After a successful login, the recheck cookie should carry a fresh
+    timestamp so the next request doesn't immediately re-call the CMS
+    (within the configured window)."""
+    sso.recheck_interval_seconds = 300
+    req = make_req(path_info="/login", remote_user="alice")
+    sso._do_login(req)
+    assert "hubzero_cms_check" in req.outcookie
+    ts = int(req.outcookie["hubzero_cms_check"].value)
+    assert ts > int(_time.time()) - 5

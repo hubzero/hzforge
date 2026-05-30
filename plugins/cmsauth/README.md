@@ -197,6 +197,25 @@ DELETE-then-redirect.
 
 - **First release:** `1.0.0` (hzforge, 2026-05-28). No upstream — this
   is a new plugin written for hzforge.
+- **`1.0.4`** (2026-05-29) — periodic CMS re-check, opt-in (review #4):
+  - New `[hubzero_cmsauth] recheck_interval_seconds` (default `0` = off,
+    back-compat).
+  - When positive, after that many seconds since the last CMS check for
+    a given browser, the plugin re-calls the CMS API on the next
+    warm-cache request. If the API returns a different username
+    (rename) or no longer authenticates (deactivation, session
+    expired), the plugin DELETEs the matching `auth_cookie` row,
+    expires the `trac_auth` cookie, and removes it from `req.incookie`
+    so the rest of the request runs as anonymous. The user is then
+    forced through `/login`, where they re-authenticate against the
+    CMS as their current self (or fail, if deactivated).
+  - State tracked in a sibling cookie `hubzero_cms_check=<unix_ts>`,
+    HttpOnly/Secure, Path scoped to the env. Unsigned: tampering can
+    only defer one re-check, never grant authentication, so the worst
+    case is current-behavior-equivalent.
+  - Recommended starting value: `300` (5 minutes). 1 extra CMS API
+    call per 5-minute window per active browser; loopback responses
+    are sub-millisecond.
 - **`1.0.3`** (2026-05-29) — two defense-in-depth tweaks:
   - **TLS verification default-on.** `_call_api` now uses
     `ssl.create_default_context()` as-is (validates cert chain + checks

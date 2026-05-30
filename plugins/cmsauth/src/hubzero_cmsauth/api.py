@@ -51,6 +51,7 @@ import json
 import logging
 import re
 import ssl
+import time
 
 try:                                      # Py3
     from http.client import HTTPSConnection, HTTPConnection
@@ -71,6 +72,15 @@ log = logging.getLogger(__name__)
 # the bearer the permissions of the Trac anonymous/authenticated group
 # itself.  Compared case-insensitively against the stripped CMS value.
 _RESERVED_USERNAMES = frozenset(["anonymous", "authenticated"])
+
+
+# Name of the sibling cookie we set to track when the last CMS recheck
+# happened for this trac_auth session.  Not signed -- a user who tampers
+# with the value can at most defer their own recheck (which keeps them
+# in the SAME pre-recheck state as today's default code path), so the
+# only escalation is "back to back-compat behavior".  Set str() for
+# Py2 unicode_literals compat (Cookie.SimpleCookie barfs on unicode keys).
+_RECHECK_COOKIE = str("hubzero_cms_check")
 
 
 # ---------------------------------------------------------------------------- #
@@ -97,6 +107,18 @@ class HubzeroSSOLoginModule(LoginModule):
         "hubzero_cmsauth", "api_timeout_seconds", 5,
         "Per-request timeout for the CMS API call.  Loopback responses are "
         "sub-millisecond; the timeout is a safety net against API hangs.",
+    )
+    recheck_interval_seconds = IntOption(
+        "hubzero_cmsauth", "recheck_interval_seconds", 0,
+        "Seconds between forced re-checks of the CMS session for a given "
+        "trac_auth-bearing browser.  0 (default) = never re-check; trust "
+        "the trac_auth cookie until Trac's own auth_cookie_lifetime "
+        "expires it (7 days by default).  Positive values close review "
+        "item #4: a user renamed or deactivated in the CMS keeps using "
+        "Trac as their old self until the cookie expires.  Recommended "
+        "starting point: 300 (5 minutes) -- one extra CMS API call per "
+        "5-minute window per active browser, sub-millisecond loopback "
+        "responses, propagates rename/deactivation in <= 5 min.",
     )
     verify_tls = BoolOption(
         "hubzero_cmsauth", "verify_tls", True,
@@ -131,16 +153,29 @@ class HubzeroSSOLoginModule(LoginModule):
             (1) REMOTE_USER already set (e.g. Apache LDAP, or our own
                 previous call within this request) -> parent honors it
             (2) trac_auth cookie present -> parent looks it up in
-                auth_cookie table (the standard Trac fast path)
+                auth_cookie table (the standard Trac fast path).
+                Optionally, after `recheck_interval_seconds` have passed
+                since the last CMS check for this browser, force a
+                re-check against the CMS API and invalidate the trac_auth
+                row if the user has been renamed/deactivated upstream.
             (3) neither -> try the CMS API.  If it returns a username,
                 set REMOTE_USER in the environ and let parent take the
                 'standard REMOTE_USER' path.
         """
-        if (not req.environ.get("REMOTE_USER")
-                and "trac_auth" not in req.incookie):
+        has_remote_user = bool(req.environ.get("REMOTE_USER"))
+        has_trac_auth = "trac_auth" in req.incookie
+        if not has_remote_user and not has_trac_auth:
+            # Cold cache: path (3) -- resolve via CMS API.
             name = self._authenticate_via_cms(req)
             if name:
                 req.environ["REMOTE_USER"] = name
+                self._stamp_recheck(req)
+        elif has_trac_auth and not has_remote_user:
+            # Warm cache: path (2).  Optionally re-validate against CMS
+            # if the recheck window has expired.
+            if (self.recheck_interval_seconds > 0
+                    and self._should_recheck(req)):
+                self._do_periodic_recheck(req)
         return LoginModule.authenticate(self, req)
 
     # -- IRequestHandler hooks (override) ---------------------------------- #
@@ -165,6 +200,10 @@ class HubzeroSSOLoginModule(LoginModule):
         # the trac_auth cookie morsel.  process_request() then calls
         # _redirect_back() which we override.
         LoginModule._do_login(self, req)
+        # Stamp the recheck cookie so the next request hits the trac_auth
+        # fast path and (with recheck disabled or window not yet expired)
+        # doesn't re-call the CMS API needlessly.
+        self._stamp_recheck(req)
 
     def _do_logout(self, req):
         """Override: bypass parent's POST-only and anonymous gates, but
@@ -335,6 +374,142 @@ class HubzeroSSOLoginModule(LoginModule):
         target = "%s://%s%s?return=%s" % (
             scheme, host, cms_path, self._b64(return_to))
         req.redirect(target)
+
+    # -- periodic CMS re-check (review #4) --------------------------------- #
+
+    def _should_recheck(self, req):
+        """True if the recheck window has expired since the last CMS check
+        for this browser.  Reads the `hubzero_cms_check` cookie; absent or
+        unparseable -> True (force a check on first request after a deploy
+        with recheck enabled, or after the user clears their cookies).
+        Always False when `recheck_interval_seconds <= 0` (the knob is off)."""
+        if self.recheck_interval_seconds <= 0:
+            return False
+        last = self._last_check_timestamp(req)
+        if last is None:
+            return True
+        return (time.time() - last) >= self.recheck_interval_seconds
+
+    @staticmethod
+    def _last_check_timestamp(req):
+        """Read the `hubzero_cms_check` cookie value (a unix timestamp set
+        by `_stamp_recheck`) and return it as a float.  Returns None when
+        the cookie is missing or the value isn't a parseable number."""
+        morsel = req.incookie.get(_RECHECK_COOKIE) if req.incookie else None
+        if morsel is None:
+            return None
+        try:
+            return float(morsel.value)
+        except (TypeError, ValueError):
+            return None
+
+    def _stamp_recheck(self, req):
+        """Set the `hubzero_cms_check` outcookie to the current unix
+        timestamp.  Path matches the env's base href so the browser only
+        sends this cookie back to /tools/<env>/* (same scope as trac_auth)."""
+        morsel = req.outcookie[_RECHECK_COOKIE] = str(int(time.time()))
+        req.outcookie[_RECHECK_COOKIE]["path"] = self._cookie_path(req)
+        req.outcookie[_RECHECK_COOKIE]["httponly"] = True
+        env_ = getattr(req, "environ", None) or {}
+        if (env_.get("wsgi.url_scheme") or "https") == "https":
+            req.outcookie[_RECHECK_COOKIE]["secure"] = True
+
+    def _do_periodic_recheck(self, req):
+        """Compare the CMS-side username to the Trac-side username (the
+        one resolved from `trac_auth` -> auth_cookie.name).  Three cases:
+
+          (a) CMS says the user is still authenticated AS THE SAME NAME ->
+              stamp a fresh recheck timestamp; no behavior change.
+
+          (b) CMS says the user has been RENAMED (different username
+              returned from the API) -> invalidate Trac's auth_cookie row
+              + clear the trac_auth cookie so this request and the next
+              behave as if they were anonymous.  User then re-logs in
+              under the new name (typically one click since the CMS
+              session is still valid).
+
+          (c) CMS says the user is NO LONGER AUTHENTICATED (401/403, or
+              network error explicitly indistinguishable from "session
+              expired") -> same invalidate.  This is the deactivation
+              case: a user fired/banned in the CMS stops being authed in
+              Trac within `recheck_interval_seconds`.
+
+        Fail-safe on transient API errors: if `_authenticate_via_cms`
+        returns None due to a network blip (not because the session is
+        actually gone), we'd invalidate the trac_auth.  The user gets a
+        single forced re-login on the network blip; they CAN re-login
+        because the CMS session itself is still valid.  Trade-off: a
+        flaky network briefly degrades UX rather than allowing stale
+        auth.  Acceptable because the alternative ("trust the cookie
+        even when CMS is silent") is what review #4 exists to fix."""
+        new_name = self._authenticate_via_cms(req)
+        trac_name = self._authname_from_trac_auth(req)
+        if new_name is None or new_name != trac_name:
+            log.info("hubzero_cmsauth: invalidating trac_auth (was %r, "
+                     "CMS now says %r); user will be forced through /login",
+                     trac_name, new_name)
+            self._invalidate_trac_auth(req)
+            return
+        self._stamp_recheck(req)
+
+    def _authname_from_trac_auth(self, req):
+        """Look up the name associated with the `trac_auth` cookie in
+        Trac's own auth_cookie table.  Returns the name or None."""
+        try:
+            cookie_value = req.incookie["trac_auth"].value
+        except (KeyError, AttributeError):
+            return None
+        try:
+            for row in self.env.db_query(
+                    "SELECT name FROM auth_cookie WHERE cookie=%s",
+                    (cookie_value,)):
+                return row[0]
+        except Exception as e:                                # noqa: BLE001
+            log.warning("hubzero_cmsauth: auth_cookie lookup failed (%s); "
+                        "treating as no match", e)
+        return None
+
+    def _invalidate_trac_auth(self, req):
+        """DELETE the auth_cookie row for the current trac_auth value,
+        expire the trac_auth cookie on the wire, and remove it from
+        req.incookie so the parent class's authenticate() sees no
+        cookie and returns None (anonymous) for the remainder of this
+        request.  Also expires the hubzero_cms_check sibling cookie."""
+        try:
+            cookie_value = req.incookie["trac_auth"].value
+        except (KeyError, AttributeError):
+            cookie_value = None
+        if cookie_value:
+            try:
+                self.env.db_transaction(
+                    "DELETE FROM auth_cookie WHERE cookie=%s",
+                    (cookie_value,))
+            except Exception as e:                            # noqa: BLE001
+                log.warning("hubzero_cmsauth: auth_cookie DELETE failed "
+                            "(%s); cookie still expired on the wire", e)
+        # Remove from incookie so the parent's authenticate sees no cookie
+        # for the rest of this request.
+        try:
+            del req.incookie["trac_auth"]
+        except (KeyError, TypeError):
+            pass
+        self._expire_cookie(req)
+        # Expire our sibling cookie too (set Max-Age=0).
+        req.outcookie[_RECHECK_COOKIE] = ""
+        req.outcookie[_RECHECK_COOKIE]["path"] = self._cookie_path(req)
+        req.outcookie[_RECHECK_COOKIE]["max-age"] = 0
+
+    @staticmethod
+    def _cookie_path(req):
+        """Path attribute for the recheck cookie -- matches the env's base
+        href (e.g. `/tools/hzforgetest`) so the browser only sends this
+        cookie back to the same env's URLs."""
+        try:
+            return req.href()
+        except (AttributeError, TypeError):
+            return "/"
+
+    # -- _redirect_back (review #2 open-redirect guard) -------------------- #
 
     @staticmethod
     def _is_same_origin(req, target):
