@@ -563,10 +563,6 @@ class HubzeroPermissionStore(Component):
                     # and discarded the results -- dead code, and the @group SELECT
                     # here ran unconditionally (an asymmetry vs grant); dropped.
                     self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
-                        # reasons.  Dropping the dead `elif gidNumber is not
-                        # None and uidNumber is not None:` block that would
-                        # have DELETEd from jos_xgroups_members / _managers.
-                        self.env.log.info('Group membership must be managed through HUBzero in order to maintain LDAP sync')
             self._mark_db_success()
         except Exception:
             self._mark_db_error()
