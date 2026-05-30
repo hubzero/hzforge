@@ -232,13 +232,18 @@ def test_group_provider_init_swallows_db_error_and_leaves_project_id_none(env, m
 
 def test_group_provider_get_permission_groups_returns_builtins_when_project_id_none(
         fake_db, group_provider_factory):
-    """No project_id -> skip the DB call, return just the builtin groups.
-    Matches HubzeroPermissionStore.get_user_permissions's guard pattern."""
-    fake_db(staged_results=[[('@should_not_appear',)]])
+    """project_id None + the 2.4.4 lazy re-resolve ALSO finds no row -> stays
+    None, returns just the builtin groups.  (Pre-2.4.4 opened no connection;
+    now it opens ONE for the re-resolve SELECT, which finds nothing.)"""
+    fake_db(staged_results=[[]])               # re-resolve SELECT returns no row
     p = group_provider_factory(project_id=None)
+    p.fail_closed = False
     assert p.get_permission_groups('alice') == ['anonymous', 'authenticated']
-    # Connection was never opened
-    assert fake_db.current() is None
+    # The re-resolve ran exactly the jos_trac_project lookup and found
+    # nothing, so the @group query was skipped.
+    calls = fake_db.current().cursor_obj.calls
+    assert len(calls) == 1
+    assert calls[0][0].startswith('SELECT id FROM jos_trac_project')
 
 
 # -----------------------------------------------------------------------------
